@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+*.db
+*.sqlite3
+
+# 环境变量
+backend/.env
+.env.local
+.env.*.local
+
+# 向量库与模型缓存
+chroma_db/
+milvus_data/
+*.bin
+*.faiss
+models_cache/
+huggingface/
+
+# 前端
+node_modules/
+dist/
+build/
+.vite/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 上传文件
+uploads/
+
+# 生成数据与原始数据集（体积大，可由脚本/公开源重现，不入库）
+backend/data/
+Chinese-medical-dialogue-data-master/
+
+# 本地工作区数据与 IDE 产物（不入库）
+.workbuddy/
+.trae-html-share-packages/
