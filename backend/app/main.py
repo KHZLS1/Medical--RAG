@@ -8,13 +8,14 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.database import Base, engine, get_db
+from app.database import Base, engine, get_db, SessionLocal
 from sqlalchemy.orm import Session
 from .config import settings
 from .rag_chain import stream_answer
@@ -216,6 +217,43 @@ async def ingest_stream(req: IngestStreamRequest):
     return EventSourceResponse(event_generator())
 
 
+# ===== 助手消息落库（供 SSE 结束时调用）=====
+def _persist_assistant_message(conversation_id: int, answer: str, sources) -> None:
+    """用独立会话保存助手回答。
+
+    为什么不能复用请求作用域的 db: 客户端中途断开时, generator 被取消,
+    FastAPI 的 get_db 依赖会在 finally 里把该会话 close 掉, 此时再操作会抛
+    "Session is closed"; 且取消期间 await 可能被二次打断。因此这里单开一个
+    SessionLocal, 并保持同步调用(单条 INSERT 仅毫秒级, 不构成事件循环瓶颈)。
+    """
+    # 一个字都没生成(例如 LLM 报错或断开得极早)就不落库, 免得前端多出一条空气泡
+    if not answer:
+        print(f"[chat][警告] 回答为空, 跳过落库 (conversation_id={conversation_id})")
+        return
+
+    from .models import Conversation, ChatMessage
+
+    db = SessionLocal()
+    try:
+        db.add(
+            ChatMessage(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=answer,
+                sources=json.dumps(sources, ensure_ascii=False) if sources else None,
+            )
+        )
+        conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+        if conv:
+            conv.updated_at = datetime.now()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[chat][警告] 保存助手消息失败: {type(e).__name__}: {e}")
+    finally:
+        db.close()
+
+
 # ===== 流式问答 (SSE) =====
 @app.post("/api/chat")
 async def chat(req: ChatRequest, db: Session = Depends(get_db)):
@@ -303,31 +341,22 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
 
                 yield {"event": "message", "data": payload}
 
-            # 流式结束后，保存助手消息到数据库
-            assistant_msg = ChatMessage(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=full_answer,
-                sources=json_mod.dumps(sources_data, ensure_ascii=False) if sources_data else None,
-            )
-            db.add(assistant_msg)
-
-            # 重新获取 conversation 对象更新 updated_at
-            from datetime import datetime
-            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-            if conv:
-                conv.updated_at = datetime.now()
-            db.commit()
-
+        except asyncio.CancelledError:
+            # 客户端中途断开：已生成的部分回答同样要落库，随后向上抛出以正常关闭流
+            print("[chat] 客户端断开连接，保存已生成的部分回答")
+            raise
         except Exception as e:
-            # 出错也要回滚
-            db.rollback()
             yield {
                 "event": "error",
                 "data": json_mod.dumps(
                     {"type": "error", "data": f"服务异常: {e}"}, ensure_ascii=False
                 ),
             }
+        finally:
+            # 无论正常结束、报错还是客户端断开，都用独立会话保存助手回答。
+            # 这里刻意用同步调用：generator 被取消时 await 可能再次被打断，
+            # 而单独的 INSERT 只有毫秒级，不会明显拖慢事件循环。
+            _persist_assistant_message(conversation_id, full_answer, sources_data)
 
     return EventSourceResponse(event_generator())
 
