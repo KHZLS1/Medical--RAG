@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-large-zh-v1.5"
     embedding_device: str = "cpu"
 
+    #查询改写
+    query_rewrite_enabled: bool = True
+
     # 数据库（在 .env 中配置 DATABASE_URL，勿在代码里写明文密码）
     database_url: str = ""
 

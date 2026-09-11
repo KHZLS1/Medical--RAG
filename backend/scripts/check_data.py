@@ -11,41 +11,41 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pymilvus import connections, Collection, utility
-
 from app.config import settings
-
-
-def connect():
-    connections.connect(uri=settings.milvus_uri)
 
 
 def show_overview(limit: int = 3):
     """打印集合概况 + 样例数据"""
-    connect()
+    from pymilvus import MilvusClient
 
     name = settings.milvus_collection
-    if not utility.has_collection(name):
+    client = MilvusClient(uri=settings.milvus_uri)
+    if not client.has_collection(name):
         print(f"集合 '{name}' 不存在，请先运行 ingest")
         return
 
-    col = Collection(name)
-    col.load()
-    total = col.num_entities
+    client.load_collection(name)
+    stats = client.get_collection_stats(name)
+    total = int(stats.get("row_count", 0)) if stats else 0
+    desc = client.describe_collection(name)
 
     print("=" * 60)
     print(f"集合名:     {name}")
     print(f"数据条数:   {total}")
     print(f"字段信息:")
-    for f in col.schema.fields:
-        print(f"  - {f.name} ({f.dtype})")
+    for f in desc.get("fields", []):
+        print(f"  - {f.get('name')} ({f.get('type')})")
+    if desc.get("functions"):
+        for fn in desc["functions"]:
+            print(f"  BM25 Function: {fn.get('name')} "
+                  f"{fn.get('input_field_names')} -> {fn.get('output_field_names')}")
 
-    # 按科室统计（count 聚合查询，避免单次 query 超过 Milvus 16384 上限）
+    # 按科室统计（metadata 是 JSON 字段，用 JSON path 过滤）
     print(f"\n科室分布:")
-    departments = ["内科", "男科", "妇产科", "肿瘤科", "儿科", "外科"]
-    for dept in departments:
-        r = col.query(
-            expr=f"department == '{dept}'",
+    for dept in ["内科", "男科", "妇产科", "肿瘤科", "儿科", "外科"]:
+        r = client.query(
+            collection_name=name,
+            filter=f'metadata["department"] == "{dept}"',
             output_fields=["count(*)"],
         )
         cnt = r[0].get("count(*)", 0) if r else 0
@@ -54,45 +54,46 @@ def show_overview(limit: int = 3):
     # 样例数据
     print(f"\n样例数据 (前 {limit} 条):")
     print("-" * 60)
-    samples = col.query(
-        expr="pk >= 0",
-        output_fields=["text", "department", "title", "source"],
+    samples = client.query(
+        collection_name=name,
+        filter="id >= 0",
+        output_fields=["content", "metadata"],
         limit=limit,
     )
     for i, s in enumerate(samples, 1):
-        print(f"[{i}] 科室: {s.get('department', '')}")
-        print(f"    标题: {s.get('title', '')}")
-        print(f"    来源: {s.get('source', '')}")
-        text = s.get("text", "")
+        meta = s.get("metadata") or {}
+        print(f"[{i}] 科室: {meta.get('department', '')}")
+        print(f"    标题: {meta.get('title', '')}")
+        print(f"    来源: {meta.get('source', '')}")
+        text = s.get("content", "")
         print(f"    内容: {text[:150]}{'...' if len(text) > 150 else ''}")
         print()
 
 
-def search_query(query: str, k: int = 5):
-    """相似度检索测试"""
-    from app.vectorstore import get_vectorstore
+def search_query(query: str, k: int = 5, mode: str = "hybrid"):
+    """检索测试：走生产同一条链路（服务端 BM25 + 稠密向量）"""
+    from app.vectorstore import hybrid_search
 
-    vs = get_vectorstore()
-
-    # 直接用 LangChain 的 similarity_search_with_score
-    results = vs.similarity_search_with_score(query, k=k)
+    results = hybrid_search(query, k=k, mode=mode)
 
     print("=" * 60)
-    print(f"检索: '{query}'  (Top-{k})")
+    print(f"检索: '{query}'  (mode={mode}, Top-{k})")
     print("=" * 60)
-    for i, (doc, score) in enumerate(results, 1):
+    for i, doc in enumerate(results, 1):
         meta = doc.metadata or {}
-        text = doc.page_content
-        print(f"[{i}] 相似度: {score:.4f}  科室: {meta.get('department', '')}")
+        print(f"[{i}] 分数: {meta.get('retrieval_score', 0):.4f}  科室: {meta.get('department', '')}")
         print(f"    标题: {meta.get('title', '')}")
-        print(f"    内容: {text[:150]}{'...' if len(text) > 150 else ''}")
+        print(f"    内容: {doc.page_content[:150]}{'...' if len(doc.page_content) > 150 else ''}")
         print()
 
 
 def main():
     parser = argparse.ArgumentParser(description="查看 Milvus 中的医疗问答数据")
     parser.add_argument("--query", type=str, default=None,
-                        help="相似度检索测试 (如: '头痛怎么办')")
+                        help="检索测试 (如: '头痛怎么办')")
+    parser.add_argument("--mode", type=str, default="hybrid",
+                        choices=["hybrid", "vector", "bm25"],
+                        help="检索模式 (默认 hybrid: BM25 + 向量)")
     parser.add_argument("--limit", type=int, default=3,
                         help="样例数据条数 (默认 3)")
     parser.add_argument("--k", type=int, default=5,
@@ -100,7 +101,7 @@ def main():
     args = parser.parse_args()
 
     if args.query:
-        search_query(args.query, k=args.k)
+        search_query(args.query, k=args.k, mode=args.mode)
     else:
         show_overview(limit=args.limit)
 

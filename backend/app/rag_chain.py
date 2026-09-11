@@ -6,17 +6,18 @@
   - Prompt 严格约束 LLM 仅基于 context 作答，禁止编造
   - 通过 astream() 支持流式输出
 """
+import asyncio
 import json
 from typing import AsyncIterator
 
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 
 from .llm import get_llm
 from .vectorstore import get_retriever
-
+from .reranker import rerank_documents
+from .query_rewriter import rewrite_query
 
 # 医疗专属 Prompt - 关键！约束 LLM 行为
 MEDICAL_PROMPT = """你是一名严谨、专业的医学助手。请仅基于【医学资料】回答用户的医疗问题。
@@ -58,58 +59,67 @@ def _format_docs_with_sources(docs: list[Document]) -> tuple[str, list[dict]]:
     return "\n\n".join(blocks), sources
 
 
-def build_rag_chain():
-    """构建 LCEL RAG 链
+def retrieve(question: str, history: list[dict] | None = None) -> tuple[list[Document], str, list[dict]]:
+    """检索并格式化：上下文改写 → 向量检索 → Reranker 精排，只检索一次
 
-    流程: question -> 检索 docs -> 组装 context -> Prompt -> LLM -> 字符串
+    返回 (docs, context, sources)，供 stream_answer 复用。
     """
-    retriever = get_retriever(k=5)
+    # 查询改写：有上下文时用上下文改写，否则用普通改写
+    from .query_rewriter import rewrite_query_with_context
+    enhanced_query = rewrite_query_with_context(question, history)
+
+    # 向量检索（用改写后的 query 召回 Top-20）
+    retriever = get_retriever(k=20)
+    docs = retriever.invoke(enhanced_query)
+
+    # Reranker 精排（用原始 question 做精细匹配，更贴合用户真实意图）
+    docs = rerank_documents(question, docs, top_k=5)
+
+    context, sources = _format_docs_with_sources(docs)
+    return docs, context, sources
+
+
+def build_generation_chain():
+    """构建生成链（不含检索）：{context, question} -> 文本
+
+    检索由 stream_answer 单独调用 retrieve() 完成，避免链内部重复检索。
+    """
     llm = get_llm()
-
-    # 自定义链: 同时输出 context 与 sources，便于接口返回引用
-    def retrieve_and_format(question: str) -> dict:
-        docs = retriever.invoke(question)
-        context, sources = _format_docs_with_sources(docs)
-        return {"context": context, "question": question, "_sources": sources}
-
     prompt = ChatPromptTemplate.from_template(MEDICAL_PROMPT)
-
-    chain = (
-        RunnableLambda(retrieve_and_format)
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    return chain
+    return prompt | llm | StrOutputParser()
 
 
 # 单例
 _chain = None
 
 
-def get_rag_chain():
+def get_generation_chain():
     global _chain
     if _chain is None:
-        _chain = build_rag_chain()
+        _chain = build_generation_chain()
     return _chain
 
 
-async def stream_answer(question: str) -> AsyncIterator[str]:
+async def stream_answer(
+    question: str,
+    history: list[dict] | None = None,
+) -> AsyncIterator[str]:
     """流式问答生成器
 
+    检索只执行一次：context 喂给生成链，sources 最后推送。
     yield 顺序:
       1. 多个 {"type": "token", "data": "..."} 流式文本块
       2. 最后一个 {"type": "sources", "data": [...]} 引用来源
     """
-    chain = get_rag_chain()
+    chain = get_generation_chain()
 
-    # 先单独跑检索拿到 sources (复用 chain 内部会重复检索，这里简化处理)
-    retriever = get_retriever(k=5)
-    docs = retriever.invoke(question)
-    _, sources = _format_docs_with_sources(docs)
+    # 检索一次：context 供生成，sources 供最后推送。
+    # retrieve() 内部包含「LLM 查询改写 + 向量检索 + Reranker 精排」，全是同步的
+    # CPU/GPU 密集调用，放进线程池执行，避免阻塞事件循环拖慢其他请求。
+    _, context, sources = await asyncio.to_thread(retrieve, question, history)
 
-    # 流式生成回答
-    async for chunk in chain.astream(question):
+    # 流式生成回答（复用同一批检索结果，不重复检索）
+    async for chunk in chain.astream({"context": context, "question": question}):
         yield json.dumps({"type": "token", "data": chunk}, ensure_ascii=False)
 
     # 最后推送来源

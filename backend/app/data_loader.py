@@ -24,16 +24,20 @@ from langchain_core.documents import Document
 from .config import settings
 
 # ============================================================
-# 上传目录管理
+# 上传目录管理（扩展名与大小上限来自 .env，见 config.py）
 # ============================================================
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# 支持的文件扩展名
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv"}
+# 支持的文件扩展名，如 UPLOAD_ALLOWED_EXTENSIONS=".pdf,.docx,.txt,.md,.csv"
+ALLOWED_EXTENSIONS = {
+    ext.strip().lower()
+    for ext in settings.upload_allowed_extensions.split(",")
+    if ext.strip()
+}
 
-# 单个文件大小上限 (100MB)
-MAX_FILE_SIZE = 100 * 1024 * 1024
+# 单个文件大小上限
+MAX_FILE_SIZE = settings.upload_max_size_mb * 1024 * 1024
 
 def get_upload_dir() -> Path:
     """返回上传文件存储目录"""
@@ -46,12 +50,14 @@ def is_allowed_file(filename: str) -> bool:
 def save_upload_file(file_bytes: bytes, filename: str) -> Path:
     """保存上传的文件到 uploads 目录
 
+    同名文件不会被覆盖：目标名已存在时自动追加 (1)(2)... 后缀。
+
     Args:
         file_bytes: 文件二进制内容
         filename: 原始文件名
 
     Returns:
-        保存后的文件绝对路径
+        保存后的文件绝对路径（文件名可能与原始名不同）
 
     Raises:
         ValueError: 文件类型不允许 / 文件过大 / 文件名含非法字符
@@ -70,8 +76,23 @@ def save_upload_file(file_bytes: bytes, filename: str) -> Path:
     safe_name = Path(filename).name
     if not safe_name or safe_name.startswith("."):
         raise ValueError(f"非法文件名: {filename}")
+    # 引号/反斜杠会破坏 Milvus JSON 过滤表达式（删除向量时要用文件名做 filter）
+    if any(ch in safe_name for ch in ('"', "'", "\\")):
+        raise ValueError(f"文件名含非法字符（引号或反斜杠）: {filename}")
 
     file_path = UPLOAD_DIR / safe_name
+
+    # 同名不覆盖：追加 (1)(2)... 直到找到空闲名字
+    if file_path.exists():
+        stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+        for index in range(1, 1000):
+            candidate = UPLOAD_DIR / f"{stem}({index}){suffix}"
+            if not candidate.exists():
+                file_path = candidate
+                break
+        else:
+            raise ValueError(f"同名文件过多，无法为 {safe_name} 生成新文件名")
+
     file_path.write_bytes(file_bytes)
     return file_path
 
@@ -284,3 +305,73 @@ def load_medical_documents(limit_per_file: int | None = None) -> list[Document]:
     大批量请用 iter_medical_documents 流式处理（scripts/ingest.py）。
     """
     return list(iter_medical_documents(limit_per_file=limit_per_file))
+
+def iter_cleaned_documents(limit_per_file: int | None = None) -> Iterator[Document]:
+    """迭代式加载清洗后的 JSON 数据（按科室分文件）
+
+    读取 backend/data/by_department/ 下的 JSON 文件，
+    将 instruction/input/output 格式转换为 LangChain Document。
+
+    Args:
+        limit_per_file: 每个文件最多加载多少条，None 表示全部
+
+    Yields:
+        Document: 每条记录转为一个 Document
+    """
+    data_dir = settings.cleaned_data_dir_resolved
+    if not data_dir.exists():
+        raise FileNotFoundError(f"清洗数据目录不存在: {data_dir}")
+
+    json_files = list(data_dir.glob("*.json"))
+    if not json_files:
+        raise FileNotFoundError(f"清洗数据目录下未找到 JSON 文件: {data_dir}")
+
+    for json_path in sorted(json_files):
+        department = json_path.stem.replace("cleaned_", "")
+        yield from _iter_json_rows(json_path, department, limit_per_file)
+
+def _iter_json_rows(
+    json_path: Path,
+    department: str,
+    limit_per_file: int | None,
+) -> Iterator[Document]:
+    """逐条读取 JSON 数组，将指令格式转为 Document"""
+    import json
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    count = 0
+    for rec in records:
+        if limit_per_file is not None and count >= limit_per_file:
+            break
+
+        # 字段映射: instruction->title, input->ask, output->answer
+        title = (rec.get("instruction") or "").strip()
+        ask = (rec.get("input") or "").strip()
+        answer = (rec.get("output") or "").strip()
+
+        if not ask and not answer:
+            continue
+
+        # 组装文档内容（与 CSV 路径保持一致）
+        parts = []
+        if title:
+            parts.append(f"标题：{title}")
+        parts.append(f"问题：{ask}")
+        parts.append(f"回答：{answer}")
+        content = "\n".join(parts)
+
+        # 跳过超长文本
+        if len(content.encode("utf-8")) > 60000:
+            continue
+
+        yield Document(
+            page_content=content,
+            metadata={
+                "department": department,
+                "title": title,
+                "source": str(json_path),
+            },
+        )
+        count += 1
