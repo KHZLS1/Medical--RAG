@@ -19,7 +19,9 @@ collection schema（由 scripts/ingest.py 建立）:
   （检索 hybrid_search / 写入 add_documents）。
 """
 import asyncio
+import json
 from functools import lru_cache
+from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
@@ -38,9 +40,32 @@ OUTPUT_FIELDS = [TEXT_FIELD, METADATA_FIELD]
 # ===== 召回条数（两路各召回 top_k，融合后再交给 Reranker 精排） =====
 DEFAULT_RECALL_K = 20
 
-# ===== 混合检索权重（可用 scripts/eval_rag.py tune 网格搜索调优） =====
+# ===== 混合检索权重 =====
+# 优先级: tune 输出的 tuned_weights.json > .env 配置(BM25_WEIGHT/VECTOR_WEIGHT) > 以下代码默认值
 BM25_WEIGHT = 0.3       # 关键词精确匹配（服务端 BM25）
 VECTOR_WEIGHT = 0.7     # 语义相似度（bge 稠密向量）
+
+
+def _load_tuned_weights() -> dict:
+    """读取 eval_rag.py tune 落盘的权重文件；文件不存在则返回空 dict"""
+    p = Path(__file__).resolve().parent.parent / settings.tuned_weights_path
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+
+# tune 输出的最优权重（模块导入时加载一次；改权重后需重启进程生效）
+_TUNED_WEIGHTS = _load_tuned_weights()
+
+
+def _resolve_weights(bm25_weight, vector_weight):
+    """把混合检索权重解析成最终值：显式传入 > tuned > 配置 > 常量默认"""
+    if bm25_weight is None:
+        bm25_weight = _TUNED_WEIGHTS.get("bm25_weight", settings.bm25_weight)
+    if vector_weight is None:
+        vector_weight = _TUNED_WEIGHTS.get("vector_weight", settings.vector_weight)
+    return bm25_weight, vector_weight
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +76,7 @@ def get_embedder() -> HuggingFaceEmbeddings:
         model_kwargs={
             "device": settings.embedding_device,
             "model_kwargs": {"dtype": "float16"},  # FP16 提速约一倍
+            "local_files_only": True,              # 强制离线加载（不联网检查更新）
         },
         encode_kwargs={
             "normalize_embeddings": True,   # bge 推荐归一化
@@ -88,8 +114,8 @@ def hybrid_search(
     query: str,
     k: int = DEFAULT_RECALL_K,
     mode: str = "hybrid",
-    bm25_weight: float = BM25_WEIGHT,
-    vector_weight: float = VECTOR_WEIGHT,
+    bm25_weight: float | None = None,
+    vector_weight: float | None = None,
     ranker_type: str = "weighted",
 ) -> list[Document]:
     """混合检索：服务端 BM25(sparse) + 稠密向量(dense)
@@ -98,8 +124,8 @@ def hybrid_search(
         query: 检索 query（建议用改写后的 query）
         k: 每路召回条数
         mode: "hybrid" (默认) / "vector" (仅语义) / "bm25" (仅关键词)
-        bm25_weight: 混合模式下 BM25 权重
-        vector_weight: 混合模式下向量权重
+        bm25_weight: 混合模式下 BM25 权重；None 时取 tuned/config
+        vector_weight: 混合模式下向量权重；None 时取 tuned/config
         ranker_type: "weighted" (默认，归一化加权) 或 "rrf" (倒数排名融合)
 
     Returns:
@@ -107,6 +133,8 @@ def hybrid_search(
     """
     if not query or not query.strip():
         return []
+
+    bm25_weight, vector_weight = _resolve_weights(bm25_weight, vector_weight)
 
     client = get_milvus_client()
     collection = settings.milvus_collection
@@ -181,8 +209,8 @@ class MilvusHybridRetriever(BaseRetriever):
 
     k: int = DEFAULT_RECALL_K
     mode: str = "hybrid"
-    bm25_weight: float = BM25_WEIGHT
-    vector_weight: float = VECTOR_WEIGHT
+    bm25_weight: float | None = None
+    vector_weight: float | None = None
 
     def _get_relevant_documents(self, query: str, **kwargs) -> list[Document]:
         return hybrid_search(

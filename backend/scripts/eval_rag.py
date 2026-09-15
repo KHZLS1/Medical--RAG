@@ -94,8 +94,8 @@ def retrieve_by_mode(question, mode="hybrid_rerank",
     )
 
     if mode == "hybrid_rerank":
-        # Reranker 精排（用原始 question 做精细匹配）
-        docs = rerank_documents(question, docs, top_k=5)
+        # Reranker 精排（用原始 question 做精细匹配），Top-K 与生产配置保持一致
+        docs = rerank_documents(question, docs, top_k=settings.reranker_top_k)
 
     context, sources = _format_docs_with_sources(docs)
     return docs, context, sources
@@ -344,6 +344,18 @@ def tune_weights(testset_path=None, k=20):
           f"Vector={best_sim['vector_weight']}")
     print(f"最佳(MRR):    BM25={best_mrr['bm25_weight']} "
           f"Vector={best_mrr['vector_weight']}")
+
+    # 把最优权重落盘到 tuned_weights.json，后端自动覆盖默认值（重启生效）
+    tuned_path = BACKEND_DIR / settings.tuned_weights_path
+    tuned_path.parent.mkdir(parents=True, exist_ok=True)
+    tuned_path.write_text(
+        json.dumps({
+            "bm25_weight": best_sim["bm25_weight"],
+            "vector_weight": best_sim["vector_weight"],
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"最优权重已写入: {tuned_path}（重启后端生效）")
     print(f"结果已保存: {output}")
     return results
 

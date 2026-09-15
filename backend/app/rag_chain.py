@@ -25,14 +25,24 @@ MEDICAL_PROMPT = """你是一名严谨、专业的医学助手。请仅基于【
 【医学资料】
 {context}
 
+【用户情况】（用户在本次对话中亲自描述的主诉，仅作参考；可能为空）
+{user_statement}
+
 【回答规则】
-1. 只能基于上述资料作答，不得使用资料外的知识，更不能编造。
-2. 如果资料不足以回答问题，请直接说明"现有医学资料无法回答该问题，建议咨询执业医师"。
-3. 回答应结构化、专业且通俗，尽量包含：可能的病因、建议检查、日常注意事项、是否需要就医。
-4. 严禁给出具体药物剂量或处方建议；如涉及用药，提示"请遵医嘱"。
-5. 若问题涉及急症（如胸痛、呼吸困难、剧烈头痛、意识丧失、大出血），优先提示"请立即拨打120或前往急诊"。
-6. 回答末尾用 [1] [2] 等标注引用的资料编号。
-7. 末尾必须附加免责声明："⚠️ 本回答仅基于公开医学资料供参考，不能替代执业医师诊断，请结合实际情况就医。"
+1. 注意区分症状归属：
+   - 用户症状 = 仅指【用户情况】里用户亲自描述的症状/问题；
+   - 【医学资料】中列举的症状 = 该疾病在资料中可能的表现，属于资料内容，
+     绝不是用户本人的症状，严禁当作"患者已出现这些症状"来回答，
+     也不得使用"您此前描述的/结合您出现的……"等把资料症状归给用户的措辞。
+2. 若【用户情况】为空或用户未描述任何具体症状，不得从资料中搬运症状强加给用户，
+   用户没提就只回答用户实际问到的内容。
+3. 只能基于上述资料作答，不得使用资料外的知识，更不能编造。
+4. 如果资料不足以回答问题，请直接说明"现有医学资料无法回答该问题，建议咨询执业医师"。
+5. 回答应结构化、专业且通俗，尽量包含：可能的病因、建议检查、日常注意事项、是否需要就医。
+6. 严禁给出具体药物剂量或处方建议；如涉及用药，提示"请遵医嘱"。
+7. 若问题涉及急症（如胸痛、呼吸困难、剧烈头痛、意识丧失、大出血），优先提示"请立即拨打120或前往急诊"。
+8. 回答末尾用 [1] [2] 等标注引用的资料编号。
+9. 末尾必须附加免责声明："⚠️ 本回答仅基于公开医学资料供参考，不能替代执业医师诊断，请结合实际情况就医。"
 
 【用户问题】
 {question}
@@ -55,14 +65,15 @@ def _format_docs_with_sources(docs: list[Document]) -> tuple[str, list[dict]]:
             "title": meta.get("title", ""),
             "source": meta.get("source", ""),
             "snippet": doc.page_content[:120] + "..." if len(doc.page_content) > 120 else doc.page_content,
+            "full_text": doc.page_content,
         })
     return "\n\n".join(blocks), sources
 
 
-def retrieve(question: str, history: list[dict] | None = None) -> tuple[list[Document], str, list[dict]]:
+def retrieve(question: str, history: list[dict] | None = None) -> tuple[list[Document], str, list[dict], str]:
     """检索并格式化：上下文改写 → 向量检索 → Reranker 精排，只检索一次
 
-    返回 (docs, context, sources)，供 stream_answer 复用。
+    返回 (docs, context, sources, enhanced_query)，供 stream_answer 复用。
     """
     # 查询改写：有上下文时用上下文改写，否则用普通改写
     from .query_rewriter import rewrite_query_with_context
@@ -76,7 +87,7 @@ def retrieve(question: str, history: list[dict] | None = None) -> tuple[list[Doc
     docs = rerank_documents(question, docs, top_k=5)
 
     context, sources = _format_docs_with_sources(docs)
-    return docs, context, sources
+    return docs, context, sources, enhanced_query
 
 
 def build_generation_chain():
@@ -116,10 +127,22 @@ async def stream_answer(
     # 检索一次：context 供生成，sources 供最后推送。
     # retrieve() 内部包含「LLM 查询改写 + 向量检索 + Reranker 精排」，全是同步的
     # CPU/GPU 密集调用，放进线程池执行，避免阻塞事件循环拖慢其他请求。
-    _, context, sources = await asyncio.to_thread(retrieve, question, history)
+    _, context, sources, enhanced_query = await asyncio.to_thread(retrieve, question, history)
+
+    # 改写结果先推送给前端（供展示"实际检索词"，便于判断改写质量）
+    yield json.dumps({"type": "rewrite", "data": enhanced_query}, ensure_ascii=False)
+
+    # 提取用户历史主诉，作为生成时"用户实际说了什么"的权威依据，避免模型把资料症状当作用户症状
+    user_statement = "\n".join(
+        m["content"] for m in (history or []) if m.get("role") == "user"
+    )[:800]
 
     # 流式生成回答（复用同一批检索结果，不重复检索）
-    async for chunk in chain.astream({"context": context, "question": question}):
+    async for chunk in chain.astream({
+        "context": context,
+        "question": question,
+        "user_statement": user_statement or "（无）",
+    }):
         yield json.dumps({"type": "token", "data": chunk}, ensure_ascii=False)
 
     # 最后推送来源

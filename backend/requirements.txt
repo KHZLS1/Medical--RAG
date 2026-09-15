@@ -37,6 +37,8 @@ FlagEmbedding==1.4.2
 openai==3.3.1
 
 # ===== 工具 =====
+# 数值计算（scripts/eval_rag.py 的相似度/覆盖率等指标依赖）
+numpy==1.26.4
 tqdm==4.66.4
 
 # ===== 分词（评估脚本 compute_coverage 用；BM25 已改为 Milvus 服务端） =====

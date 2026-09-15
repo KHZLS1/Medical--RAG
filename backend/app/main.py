@@ -23,6 +23,7 @@ from .query_rewriter import generate_title
 from .vectorstore import add_documents
 from .api.documents import router as documents_router
 from .api.conversations import router as conversations_router
+from .api.feedback import router as feedback_router
 
 
 @asynccontextmanager
@@ -67,6 +68,7 @@ app.add_middleware(
 
 app.include_router(documents_router)
 app.include_router(conversations_router)
+app.include_router(feedback_router)
 
 # ===== 请求/响应 模型 =====
 class ChatRequest(BaseModel):

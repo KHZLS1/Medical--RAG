@@ -16,6 +16,7 @@ class UploadedDocument(Base):
     file_type = Column(String(20), nullable=False, comment="文件扩展名")
     file_path = Column(String(500), nullable=False, comment="磁盘存储路径")
     uploaded_at = Column(DateTime, default=datetime.now, comment="上传时间")
+    content_hash = Column(String(64), nullable=True, comment="文件内容 SHA-256")
 
 class Conversation(Base):
     """对话会话表"""
@@ -52,3 +53,20 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
 
     conversation = relationship("Conversation", back_populates="messages")
+
+class Feedback(Base):
+    """回答反馈表：用户对助手回答的客观评价与纠错"""
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
+    message_id = Column(
+        Integer,
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+        comment="关联助手消息ID",
+    )
+    thumbs = Column(String(10), nullable=False, comment="评价: up/down")
+    corrected_answer = Column(Text, nullable=True, comment="用户纠错文本(可选)")
+    comment = Column(String(500), nullable=True, comment="补充说明")
+    created_at = Column(DateTime, default=datetime.now, comment="提交时间")

@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # 数据路径
     medical_data_dir: str = "../Chinese-medical-dialogue-data-master/Data_数据"
     cleaned_data_dir: str = "data/by_department"
+
+    # 检索权重（eval_rag.py tune 可搜出最优值，写进 .env 或 tuned 文件生效）
+    bm25_weight: float = 0.3
+    vector_weight: float = 0.7
+    reranker_top_k: int = 5
+
+    # tune 输出最优权重的落盘路径（后端自动叠加到默认值）
+    tuned_weights_path: str = "data/tuned_weights.json"
+    
     # 服务
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000

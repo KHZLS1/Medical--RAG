@@ -107,6 +107,43 @@ def _format_history(history: list[dict], max_turns: int = 6) -> str:
         lines.append(f"{role_label}: {msg['content']}")
     return "\n".join(lines) if lines else "（无历史对话）"
 
+@lru_cache(maxsize=256)
+def _cached_context_rewrite(history_key: str, question: str) -> str:
+    """带缓存的上下文改写：lru_cache 要求键可哈希，
+    故把 history 先格式化成字符串再作为缓存键（与 Prompt 入参一致）。"""
+    try:
+        llm = get_llm()
+        prompt = ChatPromptTemplate.from_template(CONTEXT_REWRITE_PROMPT)
+        chain = prompt | llm | StrOutputParser()
+        rewritten = chain.invoke({
+            "history": history_key,
+            "question": question,
+        }).strip()
+        return rewritten or question
+    except Exception as e:
+        print(f"[上下文改写] 失败，回退原始问题: {e}")
+        return question
+
+
+def _fallback_with_context(question: str, history: list[dict] | None) -> str:
+    """改写失败/退化时的兜底：用最近一轮用户主题补全当前问题。
+
+    防止"那应该怎么做"这类指代性追问，在 LLM 改写异常时退化成裸词去检索，
+    误命中"怎么治/怎么做"等无关文档（表现为多轮上下文丢失）。
+    """
+    if not history:
+        return question
+    last_user = ""
+    for m in reversed(history):
+        if m.get("role") == "user":
+            last_user = m["content"]
+            break
+    topic = last_user.strip()[:40] if last_user else ""
+    if not topic:
+        return question
+    return f"{topic} {question}".strip()
+
+
 def rewrite_query_with_context(question: str, history: list[dict] | None = None) -> str:
     """结合多轮历史改写当前问题，返回可独立检索的完整 query
 
@@ -124,19 +161,15 @@ def rewrite_query_with_context(question: str, history: list[dict] | None = None)
     if not history or len(history) == 0:
         return rewrite_query(question)
 
-    try:
-        llm = get_llm()
-        history_text = _format_history(history)
-        prompt = ChatPromptTemplate.from_template(CONTEXT_REWRITE_PROMPT)
-        chain = prompt | llm | StrOutputParser()
-        rewritten = chain.invoke({
-            "history": history_text,
-            "question": question,
-        }).strip()
-        return rewritten or question
-    except Exception as e:
-        print(f"[上下文改写] 失败，回退原始问题: {e}")
-        return question
+    # history 统一格式化成字符串，同时作为缓存键（可哈希）与 Prompt 入参
+    history_key = _format_history(history)
+
+    # _cached_context_rewrite 内部做 lru_cache + try/except：LLM 异常时原样返回 question。
+    # 若改写退化回原问题（说明未能结合上下文），用最近一轮用户主题兜底，避免裸词误检索。
+    rewritten = _cached_context_rewrite(history_key, question)
+    if rewritten == question:
+        return _fallback_with_context(question, history)
+    return rewritten
 
 
 TITLE_PROMPT = """请为以下医学问答生成一个简短的对话标题（不超过15个字）。

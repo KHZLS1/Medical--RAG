@@ -49,6 +49,16 @@ async def upload_document(
 
     content = await file.read()
 
+    # ===== 去重：相同内容直接拒绝，不写盘不入库 =====
+    import hashlib
+    digest = hashlib.sha256(content).hexdigest()
+    dup = db.query(UploadedDocument).filter(UploadedDocument.content_hash == digest).first()
+    if dup:
+        raise HTTPException(
+            status_code=409,
+            detail=f"已上传过相同内容的文件: {dup.filename}"
+        )
+
     # 1. 保存文件到磁盘
     try:
         file_path = save_upload_file(content, file.filename)
@@ -63,6 +73,7 @@ async def upload_document(
         file_size=len(content),
         file_type=os.path.splitext(stored_name)[1].lower(),
         file_path=str(file_path),
+        content_hash=digest,
     )
     db.add(doc_record)
     db.commit()

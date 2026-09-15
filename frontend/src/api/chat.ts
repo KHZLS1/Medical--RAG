@@ -7,6 +7,7 @@ export interface Source {
   title: string
   source: string
   snippet: string
+  full_text?: string
 }
 
 export interface Conversation {
@@ -26,7 +27,7 @@ export interface ChatMessageData {
 }
 
 interface SSEEvent {
-  type: 'token' | 'sources' | 'error' | 'conversation_id'
+  type: 'token' | 'sources' | 'error' | 'conversation_id' | 'rewrite'
   data: string | Source[] | number
 }
 
@@ -38,6 +39,7 @@ interface SSEEvent {
  * @param onSources 收到引用来源时的回调
  * @param onConversationId 收到会话ID时的回调（新建会话时触发）
  * @param onError  出错回调
+ * @param onRewrite 收到改写后检索词时的回调（可选）
  */
 export async function streamChat(
   question: string,
@@ -46,6 +48,7 @@ export async function streamChat(
   onSources: (sources: Source[]) => void,
   onConversationId: (id: number) => void,
   onError: (msg: string) => void,
+  onRewrite?: (q: string) => void,
   onStreamEnd?: () => void,
   signal?: AbortSignal,
 ) {
@@ -96,6 +99,8 @@ export async function streamChat(
         const evt: SSEEvent = JSON.parse(payload)
         if (evt.type === 'token' && typeof evt.data === 'string') {
           onToken(evt.data)
+        } else if (evt.type === 'rewrite' && typeof evt.data === 'string') {
+          onRewrite?.(evt.data)
         } else if (evt.type === 'sources' && Array.isArray(evt.data)) {
           onSources(evt.data as Source[])
         } else if (evt.type === 'conversation_id' && typeof evt.data === 'number') {
@@ -182,6 +187,25 @@ export async function getConversationMessages(id: number): Promise<ChatMessageDa
   if (!res.ok) throw new Error(`获取消息失败: ${res.status}`)
   const data = await res.json()
   return data.messages
+}
+
+/** 提交回答反馈（顶/踩 + 可选的纠错文本） */
+export async function submitFeedback(
+  messageId: number,
+  thumbs: 'up' | 'down',
+  correctedAnswer?: string,
+): Promise<void> {
+  const res = await fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message_id: messageId,
+      thumbs,
+      corrected_answer: correctedAnswer || null,
+    }),
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`反馈提交失败: ${res.status}`)
 }
 
 // ===== 文档管理 API =====

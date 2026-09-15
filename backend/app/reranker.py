@@ -11,6 +11,8 @@ from functools import lru_cache
 from langchain_core.documents import Document
 from FlagEmbedding import FlagReranker
 
+from .config import settings
+
 
 @lru_cache(maxsize=1)
 def get_reranker():
@@ -18,13 +20,15 @@ def get_reranker():
     return FlagReranker(
         "BAAI/bge-reranker-v2-m3",
         use_fp16=True,
+        device="cuda",
+        local_files_only=True,   # 强制离线加载（不联网检查更新）
     )
 
 
 def rerank_documents(
     query: str,
     docs: list[Document],
-    top_k: int = 5,
+    top_k: int | None = None,
     department_filter: str | None = None,
 ) -> list[Document]:
     """对检索结果重排序 + 去重 + 过滤
@@ -32,11 +36,14 @@ def rerank_documents(
     Args:
         query: 用户问题
         docs: 检索召回的文档列表
-        top_k: 最终保留的文档数
+        top_k: 最终保留的文档数；None 时取配置 RERANKER_TOP_K（默认 5）
         department_filter: 按科室过滤（如 "儿科"），None 表示不过滤
     """
     if not docs:
         return []
+
+    if top_k is None:
+        top_k = settings.reranker_top_k
 
     # 1. 元数据过滤
     if department_filter:
