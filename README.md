@@ -18,14 +18,17 @@
 
 ```
 用户提问
-  └─ 查询改写（LLM，多轮时结合历史补全省略主语）
+  └─ 查询改写（LLM，多轮时结合历史补全省略主语，改写失败自动并入上一话题兜底）
        └─ 混合检索（pymilvus hybrid_search，各召回 20 条）
             ├─ 稀疏：query 原文 → Milvus 服务端 BM25 打分（sparse 字段）
             └─ 稠密：bge 编码 → embedding 字段（metric=IP）
-            └─ 融合：WeightedRanker(BM25 0.3, 向量 0.7)，分数归一化
-       └─ Reranker 精排（bge-reranker-v2-m3，取 Top-5）
+            └─ 融合：WeightedRanker(BM25, 向量)，分数归一化，权重可配置
+       └─ Reranker 精排（bge-reranker-v2-m3，Top-K 可配置，默认 5）
             └─ DeepSeek 流式生成（严格基于检索资料，附引用编号与免责声明）
 ```
+
+**症状归属约束**：生成 Prompt 注入【用户情况】（仅取历史中用户亲自描述的主诉），
+并强制区分"用户症状"与"资料中该疾病的症状表述"，防止把检索资料里的症状误当作用户主诉。
 
 **Milvus collection schema**（由 `scripts/ingest.py` 建立，字段名与代码强绑定）
 
@@ -37,7 +40,10 @@
 | `sparse` | SPARSE_FLOAT_VECTOR | **由 BM25 Function 服务端生成，客户端不写** |
 | `metadata` | JSON | `department` / `title` / `source` / `filename` |
 
-可调参数集中在 `backend/app/vectorstore.py`：`BM25_WEIGHT`、`VECTOR_WEIGHT`、召回 `k`（默认 20，融合后给 Reranker 的候选数为 `min(2k, 50)`）。
+**检索参数（已动态化，免改代码）**：BM25/向量融合权重、Reranker Top-K 均可在 `backend/app/config.py`（或 `.env`）配置；
+`eval_rag.py tune` 搜出的最优权重会自动写入 `backend/data/tuned_weights.json`，后端启动时优先采纳，无需手改代码。
+权重优先级：`tuned_weights.json` > `.env` 配置 > 代码默认值。召回 `k` 默认 20，融合后给 Reranker 的候选数为 `min(2k, 50)`。
+> 改动权重后需重启后端（`get_retriever` 有 `lru_cache` 缓存）。
 
 ## 📁 项目结构
 
@@ -56,10 +62,11 @@
 │   │   ├── data_loader.py     # CSV/JSON 数据集加载 + 上传文件读写
 │   │   ├── text_split.py      # 中文滑窗切分
 │   │   ├── database.py        # MySQL 连接
-│   │   ├── models.py          # 会话 / 消息 / 上传文档表
+│   │   ├── models.py          # 会话 / 消息 / 上传文档 / 反馈表
 │   │   └── api/
-│   │       ├── documents.py     # 上传、列表、删除（联动清理向量）
-│   │       └── conversations.py # 会话增删改查
+│   │       ├── documents.py     # 上传（含内容哈希去重）、列表、删除（联动清理向量）
+│   │       ├── conversations.py # 会话增删改查
+│   │       └── feedback.py      # 回答反馈（赞/踩、修正答案、备注）
 │   ├── scripts/
 │   │   ├── ingest.py            # ★ 建 collection + 批量入库（内置 BM25）
 │   │   ├── preflight_check.py   # 入库前置体检（环境/schema/依赖/资源）
@@ -79,8 +86,9 @@
 ### 0) 环境要求
 
 - Docker（跑 Milvus）、MySQL 8（跑会话存储）
-- Python 3.11，CUDA 可选（`EMBEDDING_DEVICE=cuda` 可提速 20~40 倍）
-- 首次运行会下载模型：bge-large-zh-v1.5 约 1.3GB、bge-reranker-v2-m3 约 2GB
+- Python 3.10+，CUDA 可选（`EMBEDDING_DEVICE=cuda` 可提速 20~40 倍）
+- **首次运行需联网下载模型**并写入 HuggingFace 本地缓存：bge-large-zh-v1.5 约 1.3GB、bge-reranker-v2-m3 约 2GB；
+  下载完成后，代码已固化 `local_files_only=True`，之后**每次启动都强制离线加载**本地缓存，不再访问 huggingface.co。
 
 ### 1) 启动 Milvus（需 2.5+，内置 BM25 Function）
 
@@ -141,12 +149,13 @@ cd frontend && npm install && npm run dev
 | POST | `/api/chat` | 流式问答（SSE：`token` / `sources` / `conversation_id` / `error`） |
 | POST | `/api/ingest` | 同步入库（小批量，参数 `limit_per_file`） |
 | POST | `/api/ingest-stream` | 流式入库（SSE 进度） |
-| POST | `/api/upload` | 上传文档（.pdf/.docx/.txt/.md/.csv，≤100MB，同名自动改名） |
+| POST | `/api/upload` | 上传文档（.pdf/.docx/.txt/.md/.csv，≤100MB，同名自动改名；按 `content_hash` 去重，相同内容返回 409） |
 | GET | `/api/uploads` | 已上传文档列表 |
 | DELETE | `/api/uploads/{doc_id}` | **按 id 删除**：同时删磁盘文件、数据库记录与已入库向量 |
 | GET/POST | `/api/conversations` | 会话列表 / 新建会话 |
 | GET/PUT/DELETE | `/api/conversations/{id}` | 会话详情 / 改标题 / 删除（消息级联删除） |
 | GET | `/api/conversations/{id}/messages` | 会话消息列表 |
+| POST | `/api/feedback` | 回答反馈：`message_id` + `thumbs`(up/down) + 可选 `corrected_answer`/`comment` |
 
 ## 🧪 评估与调优
 
@@ -158,16 +167,15 @@ python scripts/eval_rag.py tune                               # BM25/向量权�
 python scripts/eval_rag.py summary                            # 汇总对比各模式
 ```
 
-评估与生产走**同一条** `hybrid_search` 链路，因此 tune 出来的最优权重可直接填回 `vectorstore.py`。
+评估与生产走**同一条** `hybrid_search` 链路，因此 tune 出来的最优权重会自动写入 `backend/data/tuned_weights.json`，
+后端启动时优先采纳，无需手改代码。
 
 ## 🛠️ 运维与排错
 
-**首次请求慢 / 卡在模型下载**
-本机若无法访问 huggingface.co，会反复重试导致等待数分钟。模型已在本地缓存时可开启离线模式：
-```bash
-set HF_HUB_OFFLINE=1          # PowerShell: $env:HF_HUB_OFFLINE=1
-set TRANSFORMERS_OFFLINE=1
-```
+**模型下载 / 离线加载**
+模型已固化 `local_files_only=True`，启动时强制读本地 HuggingFace 缓存，不会访问 huggingface.co。
+- 本地已有缓存：直接启动即可。
+- 换新机器需要下载：临时用国内镜像 `$env:HF_ENDPOINT="https://hf-mirror.com"`，或在命令行设置镜像后跑一次入库/问答脚本即可落缓存。
 
 **chat 报错排查顺序**
 1. `GET /api/health` 是否返回 200；
@@ -184,6 +192,15 @@ set TRANSFORMERS_OFFLINE=1
 - 彻底清空（含数据卷）：`docker compose down -v`
 - 删除单条/单科室：按 `metadata["department"]` / `metadata["filename"]` 过滤删除
 
+**已有数据库升级（老部署补 `content_hash` 列）**
+新装部署无需操作；若是在旧版本上升级，手动执行一次：
+```sql
+ALTER TABLE uploaded_documents
+  ADD COLUMN content_hash CHAR(64) NULL AFTER file_path,
+  ADD UNIQUE KEY uq_uploads_content_hash (content_hash);
+```
+（若表内已有重复内容的历史数据，唯一索引会建失败，需先清理。）
+
 **查看与检索自测**
 ```bash
 python scripts/check_data.py                                  # 概况 + 科室分布 + 样例
@@ -197,11 +214,5 @@ python scripts/check_data.py --query "头痛怎么办" --mode hybrid --k 5
 - 已限制低温度生成、拒答处方剂量，并对急症提示拨打 120
 - 接口目前**没有鉴权**，仅适合本机/内网 demo，不要直接暴露到公网
 
-## 📌 后续方向
 
-- [ ] 接口鉴权与多用户隔离（会话归属）
-- [ ] 检索权重的自动化调优（把 eval 结果接入配置）
-- [ ] 文档去重与增量索引（同一文件重复上传会重复入库）
-- [ ] 会话历史压缩（当前上下文改写只取最近 6 条消息）
-- [ ] Ragas / LangSmith 评估体系接入
-- [ ] 医疗同义词词典扩展召回、LangGraph Agent 主动反问
+
