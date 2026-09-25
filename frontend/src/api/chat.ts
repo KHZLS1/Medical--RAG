@@ -33,7 +33,14 @@ export interface ChatMessageData {
 }
 
 interface SSEEvent {
-  type: 'token' | 'sources' | 'error' | 'conversation_id' | 'rewrite' | 'trace'
+  type:
+    | 'token'
+    | 'sources'
+    | 'error'
+    | 'conversation_id'
+    | 'message_id'
+    | 'rewrite'
+    | 'trace'
   data: string | Source[] | number | TraceStep[]
 }
 
@@ -47,6 +54,10 @@ interface SSEEvent {
  * @param onError  出错回调
  * @param onRewrite 收到改写后检索词时的回调（可选）
  * @param onTrace  收到检索链路各步（累计数组）时的回调（可选）
+ * @param onMessageId 收到本条助手消息落库 id 时的回调（可选）
+ *        —— 没有它，刚生成完的回答拿不到 message_id，👍/👎 按钮就不渲染
+ * @param onStreamEnd 流结束回调（可选）
+ * @param signal  用于中止请求（可选）
  */
 export async function streamChat(
   question: string,
@@ -57,6 +68,7 @@ export async function streamChat(
   onError: (msg: string) => void,
   onRewrite?: (q: string) => void,
   onTrace?: (steps: TraceStep[]) => void,
+  onMessageId?: (id: number) => void,
   onStreamEnd?: () => void,
   signal?: AbortSignal,
 ) {
@@ -115,6 +127,8 @@ export async function streamChat(
           onSources(evt.data as Source[])
         } else if (evt.type === 'conversation_id' && typeof evt.data === 'number') {
           onConversationId(evt.data)
+        } else if (evt.type === 'message_id' && typeof evt.data === 'number') {
+          onMessageId?.(evt.data)
         } else if (evt.type === 'error' && typeof evt.data === 'string') {
           onError(evt.data)
         }
@@ -216,6 +230,40 @@ export async function submitFeedback(
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`反馈提交失败: ${res.status}`)
+}
+
+/** 单条差评（含反查出的原始问题与用户纠错） */
+export interface FeedbackItem {
+  feedback_id: number
+  message_id: number
+  question: string | null
+  answer_head: string | null
+  corrected_answer: string | null
+  comment: string | null
+  created_at: string | null
+}
+
+/** 反馈汇总 —— 人工介入的入口，见后端 GET /api/feedback/stats */
+export interface FeedbackStats {
+  total: number
+  up: number
+  down: number
+  down_rate: number
+  with_correction: number
+  down_items: FeedbackItem[]
+}
+
+/**
+ * 拉取差评汇总。
+ *
+ * 为什么需要它：`POST /api/feedback` 只把评价收进库，原来没有任何出口 ——
+ * 用户点了 👎、甚至写了纠错，也从来没人读过。这个接口把差评连同
+ * 「用户当时问的是什么」一起捞出来，反馈闭环才合上。
+ */
+export async function getFeedbackStats(limit = 50): Promise<FeedbackStats> {
+  const res = await fetch(`/api/feedback/stats?limit=${limit}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`获取反馈统计失败: ${res.status}`)
+  return res.json()
 }
 
 // ===== 文档管理 API =====

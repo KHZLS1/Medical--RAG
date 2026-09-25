@@ -1,0 +1,695 @@
+[
+ {
+  "id": "ack-01",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "孩子发烧39度怎么办"},
+   {"role": "assistant", "content": "建议先物理降温并观察精神状态，若持续高热或精神差请及时就医。[1]"}
+  ],
+  "question": "不了",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "原始 bug 样本：改写 LLM 会用历史把它补成病症查询。**2026-09-25 又补了入口层**：规则门原先判 False（`不了` 不在 _ACK_WORDS，同族只有「没了 / 没有了 / 不用了 / 不需要」），于是这句被放行到医学分支，真跑出了「检索 + 带 [1] 引用和免责声明的科普」。已补词表，本条现在两层都能拦。"
+ },
+ {
+  "id": "ack-02",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "高血压能不能吃党参"},
+   {"role": "assistant", "content": "党参属于滋补类中药，高血压患者服用前建议咨询中医师。[1]"}
+  ],
+  "question": "好的",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "纯确认；也可能是入口规则门先拦下"
+ },
+ {
+  "id": "ack-03",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "慢性胃炎平时饮食要注意什么"},
+   {"role": "assistant", "content": "少食多餐、避免辛辣刺激和浓茶咖啡。[1]"}
+  ],
+  "question": "嗯，明白了",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "ack-04",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "糖尿病怎么控制血糖"},
+   {"role": "assistant", "content": "控制饮食、规律运动并遵医嘱用药。[1]"}
+  ],
+  "question": "算了，先不问了",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "「算了」不在旧关键词表里"
+ },
+ {
+  "id": "ack-05",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "湿疹用什么药膏"},
+   {"role": "assistant", "content": "可外用弱效糖皮质激素药膏，短期使用。[1]"}
+  ],
+  "question": "这些药我先用不着",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "「用不着」是典型漏词"
+ },
+ {
+  "id": "ack-06",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "颈椎病怎么康复训练"},
+   {"role": "assistant", "content": "避免长时间低头，可做颈部米字操。[1]"}
+  ],
+  "question": "我再想想吧",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "ack-07",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "荨麻疹反复发作怎么办"},
+   {"role": "assistant", "content": "建议查找过敏原，必要时用抗组胺药。[1]"}
+  ],
+  "question": "那就先这样",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "ack-08",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "痛风急性发作怎么止痛"},
+   {"role": "assistant", "content": "急性期可用非甾体抗炎药，并建议就医评估。[1]"}
+  ],
+  "question": "行，知道了",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "ack-09",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "干眼症能治好吗"},
+   {"role": "assistant", "content": "多为对症治疗，人工泪液可缓解症状。[1]"}
+  ],
+  "question": "不用了，我看看再说",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "「不用了」不是旧关键词表里的精确词"
+ },
+ {
+  "id": "ack-10",
+  "group": "ack",
+  "history": [
+   {"role": "user", "content": "最近总是失眠"},
+   {"role": "assistant", "content": "先规律作息、睡前减少屏幕使用；持续不缓解请就医。[1]"}
+  ],
+  "question": "好，我按你说的做",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "收尾型确认，容易被误判成 new_question"
+ },
+ {
+  "id": "chitchat-01",
+  "group": "chitchat",
+  "history": [],
+  "question": "你好",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": "入口规则门应直接拦下（无 dialogue_act）"
+ },
+ {
+  "id": "chitchat-02",
+  "group": "chitchat",
+  "history": [],
+  "question": "谢谢",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-03",
+  "group": "chitchat",
+  "history": [],
+  "question": "你是谁",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-04",
+  "group": "chitchat",
+  "history": [
+   {"role": "user", "content": "胃炎要做什么检查"},
+   {"role": "assistant", "content": "常用胃镜和幽门螺杆菌检测。[1]"}
+  ],
+  "question": "再见",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": "有历史，测试寒暄不被历史污染"
+ },
+ {
+  "id": "chitchat-05",
+  "group": "chitchat",
+  "history": [],
+  "question": "你是医生吗",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": "不是医学问诊，但含医学词，规则门可能漏 → 考验 LLM 分类"
+ },
+ {
+  "id": "chitchat-06",
+  "group": "chitchat",
+  "history": [
+   {"role": "user", "content": "高血压吃什么药"},
+   {"role": "assistant", "content": "常用降压药有五大类，需遵医嘱选择。[1]"}
+  ],
+  "question": "你真厉害",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-07",
+  "group": "chitchat",
+  "history": [],
+  "question": "在吗",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-08",
+  "group": "chitchat",
+  "history": [
+   {"role": "user", "content": "孩子接种疫苗后发烧"},
+   {"role": "assistant", "content": "多为疫苗反应，注意观察体温和精神状态。[1]"}
+  ],
+  "question": "辛苦了",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-09",
+  "group": "chitchat",
+  "history": [],
+  "question": "你是机器人吧",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "chitchat-10",
+  "group": "chitchat",
+  "history": [
+   {"role": "user", "content": "颈椎病要不要做牵引"},
+   {"role": "assistant", "content": "需评估类型后决定，脊髓型禁用牵引。[1]"}
+  ],
+  "question": "改天聊，拜拜",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": ""
+ },
+ {
+  "id": "fu-01",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "高血压患者能吃党参吗"},
+   {"role": "assistant", "content": "党参属滋补类中药，服用前建议咨询中医师。[1]"}
+  ],
+  "question": "它有什么副作用",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "F 案例：原句打分 top_score=0.355，仅高于阈值 0.055，随时会被兜底"
+ },
+ {
+  "id": "fu-02",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "孩子发烧了怎么办"},
+   {"role": "assistant", "content": "先物理降温并观察精神状态，必要时就医。[1]"}
+  ],
+  "question": "那平时要注意什么",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "原句打分实测 0.696，属正常指代追问"
+ },
+ {
+  "id": "fu-03",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "慢性胃炎怎么调理"},
+   {"role": "assistant", "content": "规律饮食、避免刺激食物。[1]"}
+  ],
+  "question": "需要做胃镜吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "省略主语的追问，无显式指代词"
+ },
+ {
+  "id": "fu-04",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "荨麻疹是什么原因引起的"},
+   {"role": "assistant", "content": "常与过敏、感染、药物等因素有关。[1]"}
+  ],
+  "question": "这个病会传染吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "显式指代「这个病」"
+ },
+ {
+  "id": "fu-05",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "得了颈椎病怎么办"},
+   {"role": "assistant", "content": "避免长期低头，可做颈部锻炼。[1]"}
+  ],
+  "question": "要拍片子吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "fu-06",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "痛风能吃什么"},
+   {"role": "assistant", "content": "低嘌呤饮食，多饮水，限制动物内脏和酒。[1]"}
+  ],
+  "question": "那饮食上呢",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "「那…呢」典型省略式追问"
+ },
+ {
+  "id": "fu-07",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "长期失眠有什么危害"},
+   {"role": "assistant", "content": "可影响情绪、记忆和心血管健康。[1]"}
+  ],
+  "question": "要吃安眠药吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "fu-08",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "干眼症怎么缓解"},
+   {"role": "assistant", "content": "注意用眼休息，可使用人工泪液。[1]"}
+  ],
+  "question": "它和过敏有关吗",
+  "expect_act": "followup",
+  "expect_route": "insufficient",
+  "note": "⚠️ 标签已按 2026-09-25 实测修正（原写 generate，错）：改写完美补全为「干眼症和过敏有关吗」、打分也确实用了改写 query，但库里**真没有**两者关系的资料 → top_score=0.161 → 兜底。**这是安全的漏答，不是缺陷**"
+ },
+ {
+  "id": "fu-09",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "体检发现甲状腺结节"},
+   {"role": "assistant", "content": "多数为良性，需结合超声分级随访。[1]"}
+  ],
+  "question": "需要手术吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "fu-10",
+  "group": "followup",
+  "history": [
+   {"role": "user", "content": "湿疹用什么药膏好"},
+   {"role": "assistant", "content": "可短期外用弱效糖皮质激素药膏。[1]"}
+  ],
+  "question": "用的药膏含激素吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "ts-01",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "高血压平时要注意什么"},
+   {"role": "assistant", "content": "低盐饮食、规律服药、监测血压。[1]"}
+  ],
+  "question": "小孩反复咳嗽有痰怎么办",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "跨科室切换（心血管 → 儿科），不得被判成 followup"
+ },
+ {
+  "id": "ts-02",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "孩子发烧怎么处理"},
+   {"role": "assistant", "content": "物理降温并观察精神状态。[1]"}
+  ],
+  "question": "成年人糖尿病能吃西瓜吗",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "自足新问题，与上文的儿童发热无关"
+ },
+ {
+  "id": "ts-03",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "慢性胃炎吃什么药"},
+   {"role": "assistant", "content": "常用抑酸药和胃黏膜保护剂，需遵医嘱。[1]"}
+  ],
+  "question": "最近腰痛得厉害是什么原因",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "ts-04",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "湿疹怎么护理"},
+   {"role": "assistant", "content": "保湿、避免搔抓和过敏原。[1]"}
+  ],
+  "question": "高血压患者能不能喝浓茶",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "虽是旧话题（高血压），但是自足新问题 → 判定为 new_question 而非 followup"
+ },
+ {
+  "id": "ts-05",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "颈椎病怎么锻炼"},
+   {"role": "assistant", "content": "可做颈部米字操，避免长时间低头。[1]"}
+  ],
+  "question": "月经推迟半个月正常吗",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "跨科室切换（骨科 → 妇产科）"
+ },
+ {
+  "id": "ts-06",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "痛风不能吃什么"},
+   {"role": "assistant", "content": "限制动物内脏、海鲜和酒。[1]"}
+  ],
+  "question": "脸上长了很多痘怎么调理",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "ts-07",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "失眠怎么改善"},
+   {"role": "assistant", "content": "规律作息、睡前减少屏幕使用。[1]"}
+  ],
+  "question": "体检发现胆结石需要处理吗",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "ts-08",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "荨麻疹怎么止痒"},
+   {"role": "assistant", "content": "避免搔抓，可口服抗组胺药。[1]"}
+  ],
+  "question": "老人白内障什么时候该做手术",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "跨科室切换（皮肤科 → 眼科）"
+ },
+ {
+  "id": "ts-09",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "干眼症用什么眼药水"},
+   {"role": "assistant", "content": "可先用不含防腐剂的人工泪液。[1]"}
+  ],
+  "question": "小孩长牙发烧要吃药吗",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "跨科室切换（眼科 → 儿科）"
+ },
+ {
+  "id": "ts-10",
+  "group": "topic_switch",
+  "history": [
+   {"role": "user", "content": "高血压吃什么降压药好"},
+   {"role": "assistant", "content": "常用五大类降压药，需遵医嘱个体化选择。[1]"}
+  ],
+  "question": "总是反酸烧心是胃病吗",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": ""
+ },
+ {
+  "id": "ooc-01",
+  "group": "out_of_corpus",
+  "history": [],
+  "question": "库欣病经蝶窦手术后的皮质醇缓解判定标准是什么",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": "关键：不得被判成 ack/chitchat（那才是真危险）"
+ },
+ {
+  "id": "ooc-02",
+  "group": "out_of_corpus",
+  "history": [],
+  "question": "抗NMDAR脑炎的二线免疫治疗方案和疗程是多久",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": ""
+ },
+ {
+  "id": "ooc-03",
+  "group": "out_of_corpus",
+  "history": [],
+  "question": "脊髓性肌萎缩症用诺西那生钠的鞘内注射剂量怎么计算",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": ""
+ },
+ {
+  "id": "ooc-04",
+  "group": "topic_match_no_answer",
+  "observe": true,
+  "history": [],
+  "question": "特发性肺纤维化用吡非尼酮的起始剂量和加量方案",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "第三类：**主题高分命中但答不上来**。库里有「肺纤维化 吡非尼酮」的文档（top_score=0.576）却不含剂量方案，模型自述「未提供明确信息」却仍带引用编号 [1][2]（给「我不知道」背书）。observe=true → 不进落点分母，单列观测"
+ },
+ {
+  "id": "ooc-05",
+  "group": "out_of_corpus",
+  "history": [],
+  "question": "遗传性血管性水肿的长期预防用药怎么选",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": ""
+ },
+ {
+  "id": "ooc-06",
+  "group": "rare_but_covered",
+  "history": [],
+  "question": "嗜酸性肉芽肿性多血管炎维持缓解期用什么药",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "⚠️ 已按实测从 out_of_corpus 移入本组：库里**真的有**（= 变应性肉芽肿性血管炎 / Churg-Strauss），top_score=0.972，模型答上了。原假设「库外」不成立"
+ },
+ {
+  "id": "ooc-07",
+  "group": "out_of_corpus",
+  "history": [],
+  "question": "法布里病酶替代治疗的输注间隔是多久一次",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": ""
+ },
+ {
+  "id": "ooc-08",
+  "group": "topic_match_no_answer",
+  "observe": true,
+  "history": [],
+  "question": "CAR-T治疗复发难治多发性骨髓瘤的完全缓解率是多少",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "第三类：库里有「多发性骨髓瘤」文档（top_score=0.914）但无 CAR-T 内容，模型自述「无法回答…具体数值」却仍带 [1][2]。observe=true"
+ },
+ {
+  "id": "ooc-09",
+  "group": "topic_match_no_answer",
+  "observe": true,
+  "history": [],
+  "question": "经导管二尖瓣钳夹术的适应症和禁忌症有哪些",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "第三类：库里有「二尖瓣狭窄」文档（top_score=0.647）但无该术式，模型自述「无法完整回答」却带 [1][2][3][4][5]。observe=true。三条合起来证明：**单靠 top_score 区间切不开「可回答」与「答不上来」**（可回答组 0.658~1.000 与之重叠）"
+ },
+ {
+  "id": "ooc-10",
+  "group": "rare_but_covered",
+  "history": [
+   {"role": "user", "content": "高血压怎么控制"},
+   {"role": "assistant", "content": "低盐饮食、规律服药、定期监测。[1]"}
+  ],
+  "question": "结节性硬化症相关肾血管平滑肌脂肪瘤的处理原则",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "⚠️ 已按实测从 out_of_corpus 移入本组：库里**真的有**（肾错构瘤），top_score=0.981，模型答上了。本组价值 = 「罕见病但库里有 → 必须作答、不得兜底」；同时验证带历史时不被并进高血压话题（act 实测 new_question ✅）"
+ },
+ {
+  "id": "sm-01",
+  "group": "short_medical",
+  "history": [],
+  "question": "头痛",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "2 字。规则门靠 _MEDICAL_HINTS 的「痛」放行；若漏判 = 拒答真问题（最危险）"
+ },
+ {
+  "id": "sm-02",
+  "group": "short_medical",
+  "history": [],
+  "question": "牙疼",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "2 字，命中「疼」"
+ },
+ {
+  "id": "sm-03",
+  "group": "short_medical",
+  "history": [],
+  "question": "咳嗽",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "2 字，命中「咳」"
+ },
+ {
+  "id": "sm-04",
+  "group": "short_medical",
+  "history": [],
+  "question": "发烧了",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "3 字，命中「烧」"
+ },
+ {
+  "id": "sm-05",
+  "group": "short_medical",
+  "history": [],
+  "question": "肚子痛",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "3 字"
+ },
+ {
+  "id": "sm-06",
+  "group": "short_medical",
+  "history": [],
+  "question": "拉肚子",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "3 字，命中「拉肚」"
+ },
+ {
+  "id": "sm-07",
+  "group": "short_medical",
+  "history": [],
+  "question": "失眠",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "2 字。**无任何医学线索词、也无疑问词** → 规则门只能靠「不匹配 _ACK_WORDS」放行，是词表覆盖度的边界探针"
+ },
+ {
+  "id": "sm-08",
+  "group": "short_medical",
+  "history": [],
+  "question": "好痛",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": "⚠️ 陷阱样本 + 标签已按实测修正：含 ack 词「好」，靠 intent.py 里「_MEDICAL_HINTS 必须先于 _ACK_WORDS 判」这条顺序才没被误伤（act 实测 new_question ✅）。但改写把它压成「疼痛」两个字 → top_score=0.121 → 兜底。**无部位的主诉本来就不可检索**，兜底并追问「部位/持续时间/伴随症状」是正确行为"
+ },
+ {
+  "id": "sm-09",
+  "group": "short_medical",
+  "history": [],
+  "question": "有点晕",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "3 字，命中「晕」；无问号"
+ },
+ {
+  "id": "sm-10",
+  "group": "short_medical",
+  "history": [],
+  "question": "血糖高怎么办",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "6 字，命中「血糖」「怎么办」。贴着实长上限 8 的边界"
+ },
+ {
+  "id": "gm-01",
+  "group": "gate_misfire",
+  "history": [],
+  "question": "好恶心",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "✅ 已修（2026-09-25）：规则门原用子串 `w in q` 匹配，_ACK_WORDS 含单字「好」→ 「好恶心」被判成会话语、直接拒答，且第二层 LLM 根本没机会纠正。修法 = 整串必须能被「确认词 + 语气助词」吃干净（结构性判据）+ 线索表补「恶心」。**保留本样本作回归探针**：落点再变 chat 即为回归。"
+ },
+ {
+  "id": "gm-02",
+  "group": "gate_misfire",
+  "history": [],
+  "question": "好困",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "✅ 已修，但修了两处：① 线索表补「困」（规则门）；② 改写 Prompt 新增「症状主诉不是闲聊」边界规则 —— 实测规则门放行后仍被判成 chitchat（改写 Prompt 里 chitchat 的例子全是问候，没有任何一条覆盖「纯症状主诉」），属判据空白。"
+ },
+ {
+  "id": "gm-03",
+  "group": "gate_misfire",
+  "history": [],
+  "question": "好难受",
+  "expect_act": "new_question",
+  "expect_route": "insufficient",
+  "note": "✅ act 已修（不会再被当会话拒答）。**expect_route 由 generate 改为 insufficient（2026-09-25 实测 top_score=0.264，走兜底）**：裸症状主诉没有部位，语料里本就没有可检索的东西，「没资料 + 请补充具体部位」才是正确行为（同 sm-08「好痛」）。注意本条落在阈值带内（阈值≈0.30），落点会随阈值调整浮动，别把它当稳定期望。"
+ },
+ {
+  "id": "gm-04",
+  "group": "gate_misfire",
+  "history": [],
+  "question": "好胀",
+  "expect_act": "new_question",
+  "expect_route": "generate",
+  "note": "✅ 已修。原是按「好+不在线索表的症状」推测的**泛化探针**，实测确认整类缺陷（同组 4/4 全中招），修后 4/4 通过 —— 证明修的是判据形式而非零散漏词。"
+ },
+ {
+  "id": "chitchat-11",
+  "group": "chitchat",
+  "history": [],
+  "question": "谢谢你",
+  "expect_act": "chitchat",
+  "expect_route": "chat",
+  "note": "2026-09-25 新增，回归「吃干净」判据的盲区：`谢谢` 命中之后残余一个「你」，它既不是确认词也不是语气助词，于是整串吃不完 → 判 False 落到医学分支，对一句致谢去检索作答（与 ack-01「不了」同类缺陷，只是词表里有「谢谢」却拦不住「谢谢你」）。修法是把「谢谢你 / 感谢你」整词入表，**没有**把「你」塞进 _TAIL_CHARS —— 它不是语气助词，塞进去会连「好你」一起放行。"
+ }
+]

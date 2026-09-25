@@ -220,8 +220,17 @@ async def ingest_stream(req: IngestStreamRequest):
 
 
 # ===== 助手消息落库（供 SSE 结束时调用）=====
-def _persist_assistant_message(conversation_id: int, answer: str, sources) -> None:
-    """用独立会话保存助手回答。
+def _persist_assistant_message(conversation_id: int, answer: str, sources) -> int | None:
+    """用独立会话保存助手回答，返回新消息的 id（没落库则 None）。
+
+    为什么要返回 id
+    ---------------
+    前端要提交反馈只能按 `message_id`（见 `POST /api/feedback`），而流式回答的
+    id 是**这一刻**才生成的。原先这里把 id 丢掉，前端于是永远拿不到它，
+    `Chat.tsx` 里 `m.messageId && m.messageId > 0` 那道门恒假 ——
+    结果是**刚生成的回答根本没有 👍/👎 按钮**，只能刷新页面重新加载会话
+    才点得到。反馈闭环在最后一步断了：接口、落库、看板都齐了，用户却点不到。
+    所以把这个 id 一路传回 SSE（见 event_generator 里的 `message_id` 事件）。
 
     为什么不能复用请求作用域的 db: 客户端中途断开时, generator 被取消,
     FastAPI 的 get_db 依赖会在 finally 里把该会话 close 掉, 此时再操作会抛
@@ -231,27 +240,29 @@ def _persist_assistant_message(conversation_id: int, answer: str, sources) -> No
     # 一个字都没生成(例如 LLM 报错或断开得极早)就不落库, 免得前端多出一条空气泡
     if not answer:
         print(f"[chat][警告] 回答为空, 跳过落库 (conversation_id={conversation_id})")
-        return
+        return None
 
     from .models import Conversation, ChatMessage
 
     db = SessionLocal()
     try:
-        db.add(
-            ChatMessage(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=answer,
-                sources=json.dumps(sources, ensure_ascii=False) if sources else None,
-            )
+        msg = ChatMessage(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=answer,
+            sources=json.dumps(sources, ensure_ascii=False) if sources else None,
         )
+        db.add(msg)
         conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
         if conv:
             conv.updated_at = datetime.now()
         db.commit()
+        # commit 会让实例属性过期，取值会触发一次 SELECT；必须在 session 关闭前取
+        return msg.id
     except Exception as e:
         db.rollback()
         print(f"[chat][警告] 保存助手消息失败: {type(e).__name__}: {e}")
+        return None
     finally:
         db.close()
 
@@ -265,6 +276,8 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
       {"type": "token", "data": "..."}      答案增量文本
       {"type": "sources", "data": [...]}    引用来源 (最后一条)
       {"type": "conversation_id", "data": N} 会话ID (第一条消息)
+      {"type": "message_id", "data": N}     本条助手消息落库后的 id (最后一条)
+                                            —— 前端拿它提交 👍/👎，缺了就只能刷新页面才点得到
     """
     from .models import Conversation, ChatMessage
     import json as json_mod
@@ -319,6 +332,11 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
     async def event_generator():
         nonlocal full_answer, sources_data
 
+        # 落库是否已在正常路径完成 —— 正常路径要先落库、再用 message_id 推事件，
+        # 所以不能把落库一律塞在 finally 里（finally 里 yield 在被取消时会炸）。
+        # finally 只兜「异常 / 客户端断开」这两条没走到落库的路。
+        saved = False
+
         # 新会话先推送会话ID
         if is_new_conversation:
             yield {
@@ -343,6 +361,19 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
 
                 yield {"event": "message", "data": payload}
 
+            # 正常收尾：先落库拿到 message_id，再把它推给前端。
+            # 顺序不能反 —— 前端拿到 id 就会把它挂到最后一条助手消息上，
+            # 用来渲染 👍/👎。推早了 id 还没生成，推晚了自己这条流已经关了。
+            msg_id = _persist_assistant_message(conversation_id, full_answer, sources_data)
+            saved = True
+            if msg_id:
+                yield {
+                    "event": "message",
+                    "data": json_mod.dumps(
+                        {"type": "message_id", "data": msg_id}, ensure_ascii=False
+                    ),
+                }
+
         except asyncio.CancelledError:
             # 客户端中途断开：已生成的部分回答同样要落库，随后向上抛出以正常关闭流
             print("[chat] 客户端断开连接，保存已生成的部分回答")
@@ -355,10 +386,11 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
                 ),
             }
         finally:
-            # 无论正常结束、报错还是客户端断开，都用独立会话保存助手回答。
+            # 兜底：报错或取消时还没落库，用独立会话补一条，避免这段回答凭空消失。
             # 这里刻意用同步调用：generator 被取消时 await 可能再次被打断，
             # 而单独的 INSERT 只有毫秒级，不会明显拖慢事件循环。
-            _persist_assistant_message(conversation_id, full_answer, sources_data)
+            if not saved:
+                _persist_assistant_message(conversation_id, full_answer, sources_data)
 
     return EventSourceResponse(event_generator())
 

@@ -662,6 +662,89 @@ html, body, #root {
   color: #fff;
 }
 
+/* 反馈看板（复用 doc-panel 弹层骨架，只加统计卡与差评条目） */
+.fb-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.fb-card {
+  flex: 1 1 84px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+.fb-card-num {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+}
+.fb-up {
+  color: #15803d;
+}
+.fb-down {
+  color: var(--danger);
+}
+.fb-card-label {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-light);
+}
+.fb-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-light);
+}
+.fb-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.fb-q,
+.fb-a,
+.fb-correct {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+/* 答复与纠错压暗/变窄，让「问题」这一行最显眼 —— 定位问题靠它 */
+.fb-a {
+  color: var(--text-light);
+  font-size: 12px;
+}
+.fb-correct {
+  color: #15803d;
+}
+.fb-tag {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--primary-light);
+  color: var(--primary);
+}
+.fb-tag-a {
+  background: #f1f5f9;
+  color: var(--text-light);
+}
+.fb-tag-c {
+  background: #dcfce7;
+  color: #15803d;
+}
+.fb-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-light);
+}
+
 /* 入库控制 */
 .ingest-controls {
   display: flex;

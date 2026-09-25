@@ -40,6 +40,16 @@ uploads/
 # 生成数据与原始数据集（体积大，可由脚本/公开源重现，不入库）
 backend/data/
 Chinese-medical-dialogue-data-master/
+# ⚠️ 例外（已用 git add -f 强制入库）：下列文件不是生成物，而是「评估可复现」的输入，
+# 丢了拿不回来。改这条规则对它们无效，要增删请用 `git rm --cached` / `git add -f`：
+#   backend/data/tuned_weights.json           运行期读取的检索权重（读不到会 fallback 到代码默认值）
+#   backend/data/eval/eval_testset.json       冻结的 50 题检索测试集（md5 是参考点的一部分）
+#   backend/data/eval/eval_testset_small.json
+#   backend/data/eval/adversarial_set.json    手写 64 条 9 组对抗集
+#   backend/data/eval/weight_tuning.json      0.3/0.7 权重网格搜索的原始记录
+#   backend/data/eval/baselines/*.json        参考基线（eval compare 要读）
+# 仍不入库：cache/（绑 Prompt 指纹，见 rewrite_cache.py）、history/、*_results.json、
+#           bm25_docs.pkl（516MB）、by_department/
 
 # 本地工作区数据与 IDE 产物（不入库）
 .workbuddy/

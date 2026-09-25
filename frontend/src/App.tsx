@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Chat from './components/Chat'
 import Sidebar from './components/Sidebar'
 import DocumentPanel from './components/DocumentPanel'
+import FeedbackPanel from './components/FeedbackPanel'
 import {
   getConversations,
   deleteConversation,
@@ -19,6 +20,7 @@ export default function App() {
 
   const [health, setHealth] = useState<string>('检测中...')
   const [showDocPanel, setShowDocPanel] = useState(false)
+  const [showFbPanel, setShowFbPanel] = useState(false)
 
   async function refreshHealth() {
     try {
@@ -104,6 +106,9 @@ export default function App() {
             <button onClick={refreshHealth} className="btn-small">
               刷新状态
             </button>
+            <button onClick={() => setShowFbPanel(true)} className="btn-small">
+              💬 反馈看板
+            </button>
             <button
               onClick={() => setShowDocPanel(true)}
               className="btn-primary"
@@ -130,6 +135,7 @@ export default function App() {
       </div>
 
       {showDocPanel && <DocumentPanel onClose={() => setShowDocPanel(false)} />}
+      {showFbPanel && <FeedbackPanel onClose={() => setShowFbPanel(false)} />}
     </div>
   )
 }

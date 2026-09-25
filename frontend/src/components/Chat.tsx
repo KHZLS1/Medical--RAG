@@ -210,6 +210,18 @@ export default function Chat({
           return copy
         })
       },
+      // onMessageId — 后端落库后回传的 message_id，挂到这条助手消息上。
+      // 没有它 `m.messageId` 恒为 undefined，👍/👎 就永远不渲染（初始逻辑漏洞）。
+      (id) => {
+        setMessages((m) => {
+          const copy = [...m]
+          const last = copy[copy.length - 1]
+          if (last && last.role === 'assistant') {
+            copy[copy.length - 1] = { ...last, messageId: id }
+          }
+          return copy
+        })
+      },
       // onStreamEnd — 检测流中断
       () => {
         if (!gotSources && !gotError) {
