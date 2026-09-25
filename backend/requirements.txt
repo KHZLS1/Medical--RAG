@@ -17,6 +17,10 @@ langchain-openai==1.6.0
 langchain-huggingface==1.2.2
 langchain-text-splitters==1.1.2
 
+# ===== LangGraph（app/graph.py 检索状态图依赖） =====
+# 自动带上 langgraph-checkpoint / langgraph-prebuilt / langgraph-sdk
+langgraph==1.2.11
+
 # ===== 向量库 =====
 # 检索与写入均使用 pymilvus 原生 API（hybrid_search / insert），
 # 不再依赖 langchain-milvus 封装（其字段名假设与本 collection schema 不兼容）

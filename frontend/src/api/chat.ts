@@ -10,6 +10,12 @@ export interface Source {
   full_text?: string
 }
 
+/** 检索链路单步记录（后端 trace 事件推送，字段随节点不同而变） */
+export interface TraceStep {
+  step: string
+  [key: string]: unknown   // query / recalled / top_k / source / confidence / reason ...
+}
+
 export interface Conversation {
   id: number
   title: string
@@ -27,8 +33,8 @@ export interface ChatMessageData {
 }
 
 interface SSEEvent {
-  type: 'token' | 'sources' | 'error' | 'conversation_id' | 'rewrite'
-  data: string | Source[] | number
+  type: 'token' | 'sources' | 'error' | 'conversation_id' | 'rewrite' | 'trace'
+  data: string | Source[] | number | TraceStep[]
 }
 
 /**
@@ -40,6 +46,7 @@ interface SSEEvent {
  * @param onConversationId 收到会话ID时的回调（新建会话时触发）
  * @param onError  出错回调
  * @param onRewrite 收到改写后检索词时的回调（可选）
+ * @param onTrace  收到检索链路各步（累计数组）时的回调（可选）
  */
 export async function streamChat(
   question: string,
@@ -49,6 +56,7 @@ export async function streamChat(
   onConversationId: (id: number) => void,
   onError: (msg: string) => void,
   onRewrite?: (q: string) => void,
+  onTrace?: (steps: TraceStep[]) => void,
   onStreamEnd?: () => void,
   signal?: AbortSignal,
 ) {
@@ -101,6 +109,8 @@ export async function streamChat(
           onToken(evt.data)
         } else if (evt.type === 'rewrite' && typeof evt.data === 'string') {
           onRewrite?.(evt.data)
+        } else if (evt.type === 'trace' && Array.isArray(evt.data)) {
+          onTrace?.(evt.data as TraceStep[])
         } else if (evt.type === 'sources' && Array.isArray(evt.data)) {
           onSources(evt.data as Source[])
         } else if (evt.type === 'conversation_id' && typeof evt.data === 'number') {

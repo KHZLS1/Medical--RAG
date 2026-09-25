@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   streamChat,
   submitFeedback,
   type Source,
+  type TraceStep,
   type ChatMessageData,
 } from '../api/chat'
 
@@ -15,6 +16,7 @@ interface Message {
   retryQuestion?: string
   messageId?: number
   rewrite?: string
+  trace?: TraceStep[]
   feedbackSent?: boolean
 }
 
@@ -24,6 +26,51 @@ const SUGGESTIONS = [
   '胃食管反流有哪些症状？',
   '糖尿病患者饮食注意事项？',
 ]
+
+const CITE_RE = /\[(\d+)\]/g
+
+/**
+ * 把回答正文里的 [n] 渲染成可点击的引用锚点（点击滚到对应来源卡片并高亮）。
+ *
+ * 只对 sources 里**真实存在**的编号生效，其余原样留作纯文本。
+ * 这一点是刻意的：无资料路径（insufficient / chat）的回答本就不该带编号，
+ * 万一模型硬编了一个 [7]，宁可让它素着，也不能做成一个点不出东西的假链接——
+ * 假链接比没有链接更糟，它会把"我编了个引用"伪装成"引用可溯源"。
+ */
+function renderAnswer(
+  content: string,
+  msgKey: string,
+  sources: Source[] | undefined,
+  onCite: (msgKey: string, n: number) => void,
+): ReactNode {
+  if (!sources || sources.length === 0 || !content.includes('[')) return content
+  const known = new Set(sources.map((s) => s.index))
+  const out: ReactNode[] = []
+  let last = 0
+  let hit = false
+  CITE_RE.lastIndex = 0
+  for (let m = CITE_RE.exec(content); m; m = CITE_RE.exec(content)) {
+    const n = Number(m[1])
+    if (!known.has(n)) continue
+    hit = true
+    if (m.index > last) out.push(content.slice(last, m.index))
+    out.push(
+      <button
+        type="button"
+        className="cite"
+        key={`${msgKey}-c${m.index}`}
+        title={`跳转到来源 [${n}]`}
+        onClick={() => onCite(msgKey, n)}
+      >
+        [{n}]
+      </button>,
+    )
+    last = m.index + m[0].length
+  }
+  if (!hit) return content
+  if (last < content.length) out.push(content.slice(last))
+  return out
+}
 
 export default function Chat({
   conversationId,
@@ -37,8 +84,20 @@ export default function Chat({
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [flashId, setFlashId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+
+  // 点正文里的 [n]：滚到对应来源卡片并闪一下。卡片 id 由「消息下标 + 编号」拼成，
+  // 消息只追加不重排，所以下标稳定，不用额外维护引用表。
+  function jumpToCite(msgKey: string, n: number) {
+    const id = `cite-${msgKey}-${n}`
+    const el = document.getElementById(id)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFlashId(id)
+    window.setTimeout(() => setFlashId((cur) => (cur === id ? null : cur)), 1600)
+  }
 
   // 切换会话时，加载历史消息（流式生成中跳过，避免清空正在显示的消息）
   useEffect(() => {
@@ -136,6 +195,17 @@ export default function Chat({
           const last = copy[copy.length - 1]
           if (last && last.role === 'assistant') {
             copy[copy.length - 1] = { ...last, rewrite }
+          }
+          return copy
+        })
+      },
+      // onTrace — 记录检索链路各步（后端推的是累计数组，直接整体替换）
+      (steps) => {
+        setMessages((m) => {
+          const copy = [...m]
+          const last = copy[copy.length - 1]
+          if (last && last.role === 'assistant') {
+            copy[copy.length - 1] = { ...last, trace: steps }
           }
           return copy
         })
@@ -243,7 +313,7 @@ export default function Chat({
               {m.role === 'user' ? '🧑 你' : '🩺 医疗助手'}
             </div>
             <div className="bubble-content">
-              {m.content}
+              {renderAnswer(m.content, String(i), m.sources, jumpToCite)}
               {m.streaming && <span className="cursor">▍</span>}
             </div>
             {m.error && m.retryQuestion && (
@@ -257,11 +327,36 @@ export default function Chat({
                 <div>{m.rewrite}</div>
               </details>
             )}
+            {m.trace && m.trace.length > 0 && (
+              <details className="trace-panel" open>
+                <summary>🧭 检索过程</summary>
+                <ol className="trace-list">
+                  {m.trace.map((t, i) => (
+                    <li key={i}>
+                      <span className="trace-step">{t.step}</span>
+                      <span className="trace-detail">
+                        {Object.entries(t)
+                          .filter(([k, v]) => k !== 'step' && v !== '' && v != null)
+                          .map(([k, v]) => `${k}: ${String(v)}`)
+                          .join('  ·  ')}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            )}
             {m.sources && m.sources.length > 0 && (
               <div className="sources">
                 <div className="sources-title">📎 引用来源 ({m.sources.length})</div>
                 {m.sources.map((s) => (
-                  <div key={s.index} className="source-card">
+                  <div
+                    key={s.index}
+                    id={`cite-${i}-${s.index}`}
+                    className={
+                      'source-card' +
+                      (flashId === `cite-${i}-${s.index}` ? ' source-flash' : '')
+                    }
+                  >
                     <span className="source-index">[{s.index}]</span>
                     <span className="source-dept">{s.department || '未知科室'}</span>
                     <div className="source-title">{s.title}</div>
