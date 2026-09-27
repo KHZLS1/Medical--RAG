@@ -331,6 +331,15 @@ def retrieve_by_mode(question, mode="hybrid_rerank",
     与生产环境 app.vectorstore.hybrid_search 完全同一条链路。
     timings: 传入 dict 时记录各阶段耗时（排查慢在哪一步）
     use_rewrite: 是否做查询改写（关闭可对比改写对召回的影响）
+
+    ⚠️ 本函数**不走 graph 的检索子图**，而是手写 rewrite → hybrid_search → rerank
+    三步。这是刻意的：`tune` 要扫 mode / bm25_weight / vector_weight，而子图只读
+    settings，扫不动。代价是**图里的路由决策在这里一律看不到** ——
+    典型例子是阶段一 §13.9 的「new_question 用原句检索」闸门
+    （graph.node_rewrite + settings.rewrite_gate_on_act）：
+    本脚本默认仍会用改写 query，所以它的默认跑分**不等于生产口径**。
+    要验证生产行为，用 `eval_dialogue.py`（它走 graph.invoke）；
+    要复现"原句检索"口径，本脚本加 `--no-rewrite`。
     """
     # 统一查询改写（与生产环境一致）
     t0 = time.time()

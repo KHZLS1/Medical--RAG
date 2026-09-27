@@ -24,6 +24,7 @@ from .vectorstore import add_documents
 from .api.documents import router as documents_router
 from .api.conversations import router as conversations_router
 from .api.feedback import router as feedback_router
+from .api.stats import router as stats_router
 
 
 @asynccontextmanager
@@ -47,6 +48,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[启动][警告] Milvus 不可用，问答会失败: {type(e).__name__}: {e}")
 
+    # 展示大屏的语料统计要扫 232 个 JSON（约 500MB，几十秒）。放后台线程预热，
+    # 不阻塞启动；等有人打开大屏时缓存早就好了。
+    from .stats import warm_corpus_cache
+
+    asyncio.create_task(asyncio.to_thread(warm_corpus_cache))
+
     yield
     print("[关闭] 服务退出")
 
@@ -69,6 +76,7 @@ app.add_middleware(
 app.include_router(documents_router)
 app.include_router(conversations_router)
 app.include_router(feedback_router)
+app.include_router(stats_router)
 
 # ===== 请求/响应 模型 =====
 class ChatRequest(BaseModel):
@@ -220,8 +228,13 @@ async def ingest_stream(req: IngestStreamRequest):
 
 
 # ===== 助手消息落库（供 SSE 结束时调用）=====
-def _persist_assistant_message(conversation_id: int, answer: str, sources) -> int | None:
-    """用独立会话保存助手回答，返回新消息的 id（没落库则 None）。
+def _persist_assistant_message(
+    conversation_id: int,
+    answer: str,
+    sources,
+    is_clarification: bool = False,
+) -> tuple[int, "datetime"] | None:
+    """用独立会话保存助手回答，返回 (新消息 id, 落库时间)；没落库则 None。
 
     为什么要返回 id
     ---------------
@@ -231,6 +244,14 @@ def _persist_assistant_message(conversation_id: int, answer: str, sources) -> in
     结果是**刚生成的回答根本没有 👍/👎 按钮**，只能刷新页面重新加载会话
     才点得到。反馈闭环在最后一步断了：接口、落库、看板都齐了，用户却点不到。
     所以把这个 id 一路传回 SSE（见 event_generator 里的 `message_id` 事件）。
+
+    为什么要返回 created_at
+    ----------------------
+    前端要显示"系统回复时间"。流式结束时是客户端自己取 `new Date()`、还是用
+    这里落库的 `created_at`，单看一次刷新区别不出来 —— 但两者并不相等：客户端
+    时钟可能与服务端有偏差，而且客户端取的是"流结束那一刻"，服务端记的是
+    "INSERT 那一刻"。一旦用了客户端时间，**同一个回答的时间会在刷新前后跳变**
+    （刷新后从 `GET /messages` 读的是库里的值）。所以统一以库为准，一路带回前端。
 
     为什么不能复用请求作用域的 db: 客户端中途断开时, generator 被取消,
     FastAPI 的 get_db 依赖会在 finally 里把该会话 close 掉, 此时再操作会抛
@@ -251,20 +272,49 @@ def _persist_assistant_message(conversation_id: int, answer: str, sources) -> in
             role="assistant",
             content=answer,
             sources=json.dumps(sources, ensure_ascii=False) if sources else None,
+            is_clarification=is_clarification,
         )
         db.add(msg)
         conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
         if conv:
             conv.updated_at = datetime.now()
         db.commit()
-        # commit 会让实例属性过期，取值会触发一次 SELECT；必须在 session 关闭前取
-        return msg.id
+        # commit 会让实例属性过期，取值会触发一次 SELECT；必须在 session 关闭前取。
+        # created_at 也一并返回：前端要显示"系统回复时间"，用服务端这一刻的值才能
+        # 保证「刚生成」与「刷新后从库里读」显示的是同一个时间（客户端本地时钟
+        # 与服务端可能有时差，那会让同一个回答的时间在刷新前后跳变）。
+        return msg.id, msg.created_at
     except Exception as e:
         db.rollback()
         print(f"[chat][警告] 保存助手消息失败: {type(e).__name__}: {e}")
         return None
     finally:
         db.close()
+
+
+def _message_id_event(msg_id: int, created_at) -> dict:
+    """打包 SSE 的 `message_id` 事件。
+
+    data 是对象而不是裸 id：前端除了要 id 提交反馈，还要显示"系统回复时间"。
+    时间用库里那条记录的值，保证「刚生成」与「刷新后重读」显示同一个时间点。
+    created_at 理论上不会为 None（列有 default），真为 None 时前端会退回不显示，
+    所以这里不做特殊处理，如实透传。
+    """
+    import json as json_mod
+
+    return {
+        "event": "message",
+        "data": json_mod.dumps(
+            {
+                "type": "message_id",
+                "data": {
+                    "id": msg_id,
+                    "created_at": created_at.isoformat() if created_at else None,
+                },
+            },
+            ensure_ascii=False,
+        ),
+    }
 
 
 # ===== 流式问答 (SSE) =====
@@ -276,8 +326,11 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
       {"type": "token", "data": "..."}      答案增量文本
       {"type": "sources", "data": [...]}    引用来源 (最后一条)
       {"type": "conversation_id", "data": N} 会话ID (第一条消息)
-      {"type": "message_id", "data": N}     本条助手消息落库后的 id (最后一条)
-                                            —— 前端拿它提交 👍/👎，缺了就只能刷新页面才点得到
+      {"type": "message_id", "data": {"id": N, "created_at": "..."}}
+                                            本条助手消息落库后的 id 与落库时间 (最后一条)
+                                            —— 前端拿 id 提交 👍/👎，拿 created_at 显示
+                                            "系统回复时间"；缺了就只能刷新页面才点得到
+                                            /才看得到时间
     """
     from .models import Conversation, ChatMessage
     import json as json_mod
@@ -325,7 +378,24 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
     # commit 后 conversation 对象过期，记录 ID 供后续使用
     conversation_id = conversation.id
 
-    # 4. 流式生成回答
+    # 4. 流式生成回答（阶段二：有挂起的澄清中断 → 本条消息作为 resume 值恢复图）
+    from .graph import get_graph, thread_config, astream_resume
+
+    config = thread_config(conversation_id)
+    resuming = False
+    if settings.graph_checkpointer_enabled:
+        # 暂停中的图 next 非空（只有 interrupt 会造成这种状态）。
+        # ⚠️ 必须走 aget_state：AsyncSqliteSaver 的同步方法在事件循环线程
+        # 调用会抛 InvalidStateError，而本端点整体跑在事件循环上。
+        snapshot = await (await get_graph()).aget_state(config)
+        resuming = bool(snapshot and snapshot.next)
+
+    if resuming:
+        stream = astream_resume(req.question, history, config)
+    else:
+        stream = stream_answer(req.question, history, config=config)
+
+    # 5. 收集完整回答与 sources
     full_answer = ""
     sources_data = None
 
@@ -348,14 +418,29 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
             }
 
         try:
-            async for payload in stream_answer(req.question, history):
+            async for payload in stream:
                 # 解析 payload 收集完整回答和 sources
                 try:
                     evt = json_mod.loads(payload)
                     if evt.get("type") == "token":
                         full_answer += evt["data"]
+                    elif evt.get("type") == "correction":
+                        # 引用编号被程序剥除 / 追加了忠实性提示（阶段四）→ 落库必须用
+                        # 修正后的文本。否则页面显示修正版、库里存原始版，刷新后假编号
+                        # 复活（页面与库不一致是最糟的形态，排查时会被当成"随机复现"）。
+                        full_answer = (evt.get("data") or {}).get("answer") or full_answer
                     elif evt.get("type") == "sources":
                         sources_data = evt["data"]
+                    elif evt.get("type") == "clarification_request":
+                        # 中断不是错误：把追问话术作为助手消息落库（刷新页面后
+                        # 仍可见，后续回复才有上下文）；message_id 一并回传。
+                        msg_text = (evt.get("data") or {}).get("message", "")
+                        saved_msg = _persist_assistant_message(
+                            conversation_id, msg_text, [], is_clarification=True
+                        )
+                        saved = True   # 落库在此完成，别让 finally 再补一条
+                        if saved_msg:
+                            yield _message_id_event(*saved_msg)
                 except Exception:
                     pass
 
@@ -364,15 +449,10 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
             # 正常收尾：先落库拿到 message_id，再把它推给前端。
             # 顺序不能反 —— 前端拿到 id 就会把它挂到最后一条助手消息上，
             # 用来渲染 👍/👎。推早了 id 还没生成，推晚了自己这条流已经关了。
-            msg_id = _persist_assistant_message(conversation_id, full_answer, sources_data)
+            saved_msg = _persist_assistant_message(conversation_id, full_answer, sources_data)
             saved = True
-            if msg_id:
-                yield {
-                    "event": "message",
-                    "data": json_mod.dumps(
-                        {"type": "message_id", "data": msg_id}, ensure_ascii=False
-                    ),
-                }
+            if saved_msg:
+                yield _message_id_event(*saved_msg)
 
         except asyncio.CancelledError:
             # 客户端中途断开：已生成的部分回答同样要落库，随后向上抛出以正常关闭流

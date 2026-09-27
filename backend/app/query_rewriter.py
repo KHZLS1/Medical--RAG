@@ -60,12 +60,17 @@ class RewriteResult:
     dialogue_act —— 这一轮的对话行为（阶段一）：new_question / followup / ack / chitchat。
                  由**同一次改写调用顺带产出**（改写本来就看得见 history，零额外延迟）。
                  解析不到标签时回退 "new_question" —— 最安全：走完整检索。
+    focus_entity —— 当前讨论的医学实体短语（阶段三）："高血压 党参" / "小儿发热"。
+                 与 query 的区别：query 是**这一轮**的检索词，焦点是**跨轮**的状态。
+                 二者刻意分开 —— query 在 new_question 时会被闸门丢弃，而焦点必须留下。
+                 焦点与 query 的退化状态**解耦**：改写退化时 query 不可用，焦点照样提取。
     """
     query: str
     degraded: bool = False
     reason: str = ""
     transient: bool = False
     dialogue_act: str = "new_question"
+    focus_entity: str = ""
 
 
 # 元话语词表：LLM 在"改不动"时会转而解释自己改不动，这些词就是解释的标志。
@@ -176,15 +181,47 @@ _LABEL_RESIDUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 「焦点：」标签行（阶段三）。与行为/查询标签行同形，取值允许含空格（实体短语有空格）。
+_FOCUS_LINE_RE = re.compile(
+    r"^\s*[-*#>\s]*\**\s*(?:焦点|当前实体|讨论实体|实体|focus)\**\s*[:：]\s*\**\s*(.+?)\s*\**\s*$",
+    re.IGNORECASE,
+)
+
+# 焦点取值的「空」写法。必须**精确匹配**（不能子串匹配）：
+# "无" 是合法空值，但 "无痛" 是实体 —— 子串匹配会把后者误判成空。
+_FOCUS_EMPTY = frozenset({"无", "空", "none", "n/a", "na", "null", "-", "—", "（无）", "(无)"})
+
+# 焦点长度上限：实体短语不该超过 30 字。超长说明模型在解释而非给实体 → 宁缺勿滥。
+_FOCUS_MAX_CHARS = 30
+
+
+def _clean_focus(raw: str) -> str:
+    """把「焦点」标签的取值收敛成实体短语（纯函数，零 LLM）。
+
+    与 `_sanitize_rewrite` 的两处刻意差异：
+      1. **不做元话语判定**——"无"这类空值本身就是合法输出，不是"模型在解释";
+      2. 超长直接判空而非回退原问题——焦点缺失是安全状态（阶段三的兜底会退回
+         下一层），而一个被污染的超长"焦点"会被拼进检索词，比没有更糟。
+    """
+    text = _CODE_FENCE_RE.sub("", (raw or "").strip())
+    text = text.split("\n", 1)[0].strip()
+    text = _WRAP_RE.sub("", text).strip()
+    if not text or text.lower() in _FOCUS_EMPTY:
+        return ""
+    if len(text) > _FOCUS_MAX_CHARS:
+        return ""
+    return text
+
 
 def _parse_rewrite_output(raw: str, original: str) -> RewriteResult:
-    """解析 Prompt 约定的输出：`行为：<act>` / `查询：<query>` → 契约对象。
+    """解析 Prompt 约定的输出：`行为：<act>` / `焦点：<entity>` / `查询：<query>` → 契约对象。
 
     逐行扫描，把**标签行吃掉**，只把剩下的内容交给 `_sanitize_rewrite` 收敛。
 
     ⚠️ 为什么必须先剥标签再收敛：`_sanitize_rewrite` 的第 3 步是"只取第一行"。
     标签行若留在最前面，就会被当成检索词送进 Milvus —— 正是这条链路最初出事故
-    的那个形态（LLM 的说明文字被当查询串）。
+    的那个形态（LLM 的说明文字被当查询串）。焦点行同理，不消费它就会变成
+    `"焦点：高血压 党参"` 整串进 Milvus。
 
     四处降级都不破坏 query 契约（保证可直接检索）：
       标签行缺失（旧格式输出）→ act 回退 new_question，其余照常收敛；
@@ -196,6 +233,7 @@ def _parse_rewrite_output(raw: str, original: str) -> RewriteResult:
     act = "new_question"
     seen_tag = False
     query_from_label: str | None = None
+    focus_raw: str | None = None
     kept: list[str] = []
 
     for line in (raw or "").split("\n"):
@@ -205,6 +243,12 @@ def _parse_rewrite_output(raw: str, original: str) -> RewriteResult:
             if not seen_tag:
                 seen_tag = True
                 act = _ACT_LABELS.get(m.group(1).strip().lower(), "new_question")
+            continue
+        m = _FOCUS_LINE_RE.match(line)
+        if m:
+            # 焦点行同样必须被消费，否则整串会落进 kept 被当检索词（见 docstring）
+            if focus_raw is None:
+                focus_raw = m.group(1)
             continue
         m = _QUERY_LINE_RE.match(line)
         if m:
@@ -222,9 +266,11 @@ def _parse_rewrite_output(raw: str, original: str) -> RewriteResult:
     if not base.degraded:
         m = _LABEL_RESIDUE_RE.match(base.query)
         if m and m.group(1).strip().lower() in _ACT_LABELS:
-            return RewriteResult(original, True, "标签行未被剥离", base.transient, act)
+            return RewriteResult(original, True, "标签行未被剥离", base.transient, act,
+                                 _clean_focus(focus_raw or ""))
 
-    return RewriteResult(base.query, base.degraded, base.reason, base.transient, act)
+    return RewriteResult(base.query, base.degraded, base.reason, base.transient, act,
+                         _clean_focus(focus_raw or ""))
 
 
 def _invoke_rewrite(prompt_text: str, payload: dict, original: str) -> RewriteResult:
@@ -308,6 +354,8 @@ def _rewrite_cached(kind: str, history_key: str, question: str,
                 hit["query"], bool(hit.get("degraded")), hit.get("reason", ""),
                 # 旧缓存条目没有 act 字段 → 回退 new_question（最安全：走完整检索）
                 dialogue_act=hit.get("act", "new_question"),
+                # 旧缓存条目没有 focus 键 → 空串（阶段三兜底会退回下一层，安全）
+                focus_entity=hit.get("focus", ""),
             )
 
     result = _invoke_rewrite(prompt_text, payload, question)
@@ -315,7 +363,8 @@ def _rewrite_cached(kind: str, history_key: str, question: str,
     # transient（异常/超时）不写盘 —— 否则一次抖动会永久固化成"这道题不改写"。
     if cache is not None and not result.transient:
         cache.put(kind, history_key, question,
-                  result.query, result.degraded, result.reason, result.dialogue_act)
+                  result.query, result.degraded, result.reason, result.dialogue_act,
+                  result.focus_entity)
     return result
 
 REWRITE_PROMPT = """你是一个医学搜索查询改写助手。请先判断这轮发言的「对话行为」，再改写查询。
@@ -343,9 +392,14 @@ REWRITE_PROMPT = """你是一个医学搜索查询改写助手。请先判断这
 4. 保持原意不变，不引入用户未提及的新病症
 5. 即使问题很短、不像医学问题，也必须给出查询串本身；**严禁**输出
    "无法判断""信息不足""过于简短"之类的说明——实在改不动就原样输出用户问题。
+6. 「焦点」是**跨轮状态**，不是这一轮的检索词：它回答"我们正在聊哪个病/哪个药"。
+   话题切换时要换成新实体；纯寒暄或没有明确实体时写「无」。
+   示例：上一轮"高血压患者能吃党参吗" → 焦点"高血压 党参"；
+        本轮"它有什么副作用" → 焦点"党参 副作用"，查询"党参 副作用 禁忌"。
 
-【输出格式】严格两行，不要任何其它内容、不要编号、不要加引号：
+【输出格式】严格三行，不要任何其它内容、不要编号、不要加引号：
 行为：<new_question|followup|ack|chitchat>
+焦点：<当前正在讨论的核心疾病/症状/药物实体，短语，不超过20字；没有明确实体就写「无」>
 查询：<改写后的查询>
 
 用户问题：{question}
@@ -430,9 +484,14 @@ CONTEXT_REWRITE_PROMPT = """你是一个医学对话上下文理解助手。
 4. 即使当前问题很短、与上文无关或不像医学问题，也必须输出一条查询串；
    **严禁**输出"无法判断""信息不足""过于简短"之类的说明——若真的无从结合
    上下文，就原样输出当前问题，不要改写。
+5. 「焦点」是**跨轮状态**，不是这一轮的检索词：它回答"我们正在聊哪个病/哪个药"。
+   话题切换时要换成新实体；纯寒暄或没有明确实体时写「无」。
+   示例：上一轮"高血压患者能吃党参吗" → 焦点"高血压 党参"；
+        本轮"它有什么副作用" → 焦点"党参 副作用"，查询"党参 副作用 禁忌"。
 
-【输出格式】严格两行，不要任何其它内容、不要编号、不要加引号：
+【输出格式】严格三行，不要任何其它内容、不要编号、不要加引号：
 行为：<new_question|followup|ack|chitchat>
+焦点：<当前正在讨论的核心疾病/症状/药物实体，短语，不超过20字；没有明确实体就写「无」>
 查询：<改写后的查询>
 
 【对话历史】
@@ -465,39 +524,17 @@ def _context_rewrite(history_key: str, question: str) -> RewriteResult:
     )
 
 
-def _fallback_with_context(question: str, history: list[dict] | None) -> str:
-    """（当前**不再调用** —— 见 rewrite_for_retrieval 的说明，D1 选 A）
-
-    历史实现：改写退化时用最近一轮用户主题拼成 "{上一轮发言} {当前问题}" 再检索。
-    它救的是"那应该怎么做"这类真指代追问，但**无法区分"指代追问"与"随口附和"**：
-
-        「不了」+ 历史[孩子发烧了怎么办]
-          → 退化 → 拼出 "孩子发烧了怎么办 不了"
-          → 高分命中「小儿发热」文档 → 看起来"有证据" → 又答一遍发烧
-
-    也就是说它会把这个 bug 变得更隐蔽。保留函数体是为了阶段一做完分类后，
-    按 `dialogue_act == followup` 条件重新启用；在那之前一律不用。
-    """
-    if not history:
-        return question
-    last_user = ""
-    for m in reversed(history):
-        if m.get("role") == "user":
-            last_user = m["content"]
-            break
-    topic = last_user.strip()[:40] if last_user else ""
-    if not topic:
-        return question
-    return f"{topic} {question}".strip()
-
-
 def rewrite_for_retrieval(question: str, history: list[dict] | None = None) -> RewriteResult:
     """⚠️ 改写节点的**唯一入口**（graph.node_rewrite 用它）→ 返回契约对象。
 
     退化时的行为（D1 选 A）：**老实回退原问题**，不拼历史主题。
     「不了」就让它以「不了」去检索 —— 检索不出东西是正确答案，
     由下游的证据闸门判成 evidence_state=none 走兜底节点。
-    真正的指代追问改写失败时召回会变差，但**不会错答**，正解在阶段三的 focus_entity。
+    真正的指代追问改写失败时召回会变差，但**不会错答** —— 这一缺口由阶段三的
+    focus_entity 兜底补上（见 graph.node_rewrite 的 focus_fallback 分支）。
+
+    注意 focus_entity 与本函数的退化状态**解耦**：即使这里 degraded=True，
+    焦点仍会被提取出来，正是为了给上面那条兜底用。
     """
     if not settings.query_rewrite_enabled:
         return RewriteResult(question)

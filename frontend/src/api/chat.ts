@@ -16,6 +16,20 @@ export interface TraceStep {
   [key: string]: unknown   // query / recalled / top_k / source / confidence / reason ...
 }
 
+/** 证据不足时后端中断追问（阶段二）。后端 interrupt() 的 value 原样透传。 */
+export interface ClarificationRequest {
+  type: 'clarification_request'
+  message: string
+  top_score?: number
+}
+
+/** 忠实性校验对回答的修正（阶段四）：剥除越界引用编号 / 追加提示后的完整文本 */
+export interface CorrectionPayload {
+  answer: string
+  invalid_citations: number[]
+  verdict: string
+}
+
 export interface Conversation {
   id: number
   title: string
@@ -30,6 +44,17 @@ export interface ChatMessageData {
   content: string
   sources?: Source[] | null
   created_at: string
+  /** 本条消息是否已有反馈（后端返回 {id, thumbs}），assistant 消息可为 null */
+  feedback?: { id: number; thumbs: 'up' | 'down' } | null
+  /** 本条是否为证据不足的追问话术（阶段二）：刷新后据此恢复「🔎 请补充信息」徽章 */
+  is_clarification?: boolean
+}
+
+/** 助手消息落库后回传的元信息（message_id 事件） */
+export interface PersistedMessageMeta {
+  id: number
+  /** 落库时间（服务端）。显示"系统回复时间"以它为准，见后端 main.py 的说明 */
+  created_at: string | null
 }
 
 interface SSEEvent {
@@ -41,7 +66,9 @@ interface SSEEvent {
     | 'message_id'
     | 'rewrite'
     | 'trace'
-  data: string | Source[] | number | TraceStep[]
+    | 'clarification_request'
+    | 'correction'
+  data: string | Source[] | number | TraceStep[] | ClarificationRequest | CorrectionPayload | PersistedMessageMeta
 }
 
 /**
@@ -53,10 +80,17 @@ interface SSEEvent {
  * @param onConversationId 收到会话ID时的回调（新建会话时触发）
  * @param onError  出错回调
  * @param onRewrite 收到改写后检索词时的回调（可选）
+ * @param onClarification 证据不足时后端中断追问的回调（可选）。
+ *        收到它即本轮结束（无 token / sources），用户下一条输入会作为补充恢复对话
  * @param onTrace  收到检索链路各步（累计数组）时的回调（可选）
- * @param onMessageId 收到本条助手消息落库 id 时的回调（可选）
- *        —— 没有它，刚生成完的回答拿不到 message_id，👍/👎 按钮就不渲染
+ * @param onMessageId 收到本条助手消息落库元信息时的回调（可选）
+ *        —— 没有它，刚生成完的回答拿不到 message_id，👍/👎 按钮就不渲染；
+ *        也拿不到服务端落库时间，"系统回复时间"就只能用客户端本地时钟，
+ *        刷新后同一个回答的时间会跳变
  * @param onStreamEnd 流结束回调（可选）
+ * @param onCorrection 忠实性校验改了回答文本时的回调（可选，阶段四）。
+ *        收到即**整段替换**已显示的回答（token 事件只能追加，这是唯一能反映
+ *        "剥除越界引用编号"的入口）。不传时行为与之前完全一致
  * @param signal  用于中止请求（可选）
  */
 export async function streamChat(
@@ -67,9 +101,11 @@ export async function streamChat(
   onConversationId: (id: number) => void,
   onError: (msg: string) => void,
   onRewrite?: (q: string) => void,
+  onClarification?: (c: ClarificationRequest) => void,
   onTrace?: (steps: TraceStep[]) => void,
-  onMessageId?: (id: number) => void,
+  onMessageId?: (meta: PersistedMessageMeta) => void,
   onStreamEnd?: () => void,
+  onCorrection?: (c: CorrectionPayload) => void,
   signal?: AbortSignal,
 ) {
   const res = await fetch('/api/chat', {
@@ -121,14 +157,24 @@ export async function streamChat(
           onToken(evt.data)
         } else if (evt.type === 'rewrite' && typeof evt.data === 'string') {
           onRewrite?.(evt.data)
+        } else if (evt.type === 'clarification_request' && evt.data && typeof evt.data === 'object') {
+          onClarification?.(evt.data as ClarificationRequest)
         } else if (evt.type === 'trace' && Array.isArray(evt.data)) {
           onTrace?.(evt.data as TraceStep[])
+        } else if (evt.type === 'correction' && evt.data && typeof evt.data === 'object') {
+          onCorrection?.(evt.data as CorrectionPayload)
         } else if (evt.type === 'sources' && Array.isArray(evt.data)) {
           onSources(evt.data as Source[])
         } else if (evt.type === 'conversation_id' && typeof evt.data === 'number') {
           onConversationId(evt.data)
+        } else if (evt.type === 'message_id' && evt.data && typeof evt.data === 'object') {
+          // 兼容裸 id（老后端）：只给了 id 时 created_at 为 null，前端退回用本地时间
+          const meta = evt.data as PersistedMessageMeta
+          if (typeof meta.id === 'number') {
+            onMessageId?.({ id: meta.id, created_at: meta.created_at ?? null })
+          }
         } else if (evt.type === 'message_id' && typeof evt.data === 'number') {
-          onMessageId?.(evt.data)
+          onMessageId?.({ id: evt.data, created_at: null })
         } else if (evt.type === 'error' && typeof evt.data === 'string') {
           onError(evt.data)
         }
@@ -159,9 +205,13 @@ export async function ingestData(limitPerFile: number = 500) {
 
 /**
  * 健康检查
+ *
+ * 必须 no-store：这个接口的唯一用途就是"点一下看后端还活着没"，
+ * 任何形式的缓存命中都会让按钮变成假动作。
  */
 export async function checkHealth() {
-  const res = await fetch('/api/health')
+  const res = await fetch('/api/health', { cache: 'no-store' })
+  if (!res.ok) throw new Error(`健康检查失败: ${res.status}`)
   return res.json()
 }
 
@@ -213,12 +263,13 @@ export async function getConversationMessages(id: number): Promise<ChatMessageDa
   return data.messages
 }
 
-/** 提交回答反馈（顶/踩 + 可选的纠错文本） */
+/** 提交回答反馈（顶/踩 + 可选纠错文本）。后端幂等：同一消息重复提交视为更新。 */
 export async function submitFeedback(
   messageId: number,
   thumbs: 'up' | 'down',
   correctedAnswer?: string,
-): Promise<void> {
+  comment?: string,
+): Promise<{ feedback_id: number; thumbs: string }> {
   const res = await fetch('/api/feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -226,10 +277,21 @@ export async function submitFeedback(
       message_id: messageId,
       thumbs,
       corrected_answer: correctedAnswer || null,
+      comment: comment || null,
     }),
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`反馈提交失败: ${res.status}`)
+  return res.json()
+}
+
+/** 撤回反馈（撤销对某条助手消息的评价，供点错时反悔） */
+export async function withdrawFeedback(messageId: number): Promise<void> {
+  const res = await fetch(`/api/feedback/${messageId}`, {
+    method: 'DELETE',
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`撤回反馈失败: ${res.status}`)
 }
 
 /** 单条差评（含反查出的原始问题与用户纠错） */
@@ -251,17 +313,26 @@ export interface FeedbackStats {
   down_rate: number
   with_correction: number
   down_items: FeedbackItem[]
+  /** 分页：当前页起点、是否还有下一页 */
+  offset: number
+  has_more: boolean
 }
 
 /**
- * 拉取差评汇总。
+ * 拉取差评汇总（分页）。
  *
  * 为什么需要它：`POST /api/feedback` 只把评价收进库，原来没有任何出口 ——
  * 用户点了 👎、甚至写了纠错，也从来没人读过。这个接口把差评连同
  * 「用户当时问的是什么」一起捞出来，反馈闭环才合上。
  */
-export async function getFeedbackStats(limit = 50): Promise<FeedbackStats> {
-  const res = await fetch(`/api/feedback/stats?limit=${limit}`, { cache: 'no-store' })
+export async function getFeedbackStats(
+  limit = 50,
+  offset = 0,
+): Promise<FeedbackStats> {
+  const res = await fetch(
+    `/api/feedback/stats?limit=${limit}&offset=${offset}`,
+    { cache: 'no-store' },
+  )
   if (!res.ok) throw new Error(`获取反馈统计失败: ${res.status}`)
   return res.json()
 }

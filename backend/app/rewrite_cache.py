@@ -74,13 +74,15 @@ class RewriteCache:
         return item
 
     def put(self, kind: str, history_key: str, question: str, query: str,
-            degraded: bool = False, reason: str = "", act: str = "new_question") -> None:
+            degraded: bool = False, reason: str = "", act: str = "new_question",
+            focus: str = "") -> None:
         self._entries[self.make_key(kind, history_key, question)] = {
             "q": question,          # 存原问题，文件可读、便于人工核对
             "query": query,
             "degraded": degraded,
             "reason": reason,
             "act": act,             # 对话行为（阶段一），随改写结果一起固化
+            "focus": focus,         # 焦点实体（阶段三），同上
         }
         while len(self._entries) > self.max_entries:
             self._entries.pop(next(iter(self._entries)))   # 淘汰最旧的

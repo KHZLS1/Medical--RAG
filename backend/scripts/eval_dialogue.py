@@ -104,15 +104,20 @@ DEFAULT_JSON = BACKEND / "data" / "eval" / "dialogue_results.json"
 
 # trace 的「最后一步」→ 最终落到哪个节点。
 # generate 路径没有专属步骤名，它的最后一步是「精排」。
+# ⚠️ 「人工澄清」必须在这里有条目：阶段二开启时证据不足会中断追问，
+#    若它缺席，route_of 会继续往前找到「精排」而误报成 generate ——
+#    既错判落点，又掩盖"其实被中断了"这个事实。
 ROUTE_BY_STEP = {
     "对话式回答": "chat",
     "证据不足兜底": "insufficient",
+    "人工澄清": "human_review",
     "精排": "generate",
 }
 ROUTE_LABEL = {
     "chat": "对话回应（未检索）",
     "generate": "医学作答（有资料）",
     "insufficient": "证据不足兜底",
+    "human_review": "人工澄清（中断追问）",
     "unknown": "?? 未知",
 }
 
@@ -493,11 +498,22 @@ def main():
                     help="把逐条原始结果落盘到该路径（默认就落盘，避免报告与逐条记录不同源）")
     ap.add_argument("--fail-threshold", type=int, default=0,
                     help="允许的方向性错误条数上限（默认 0，超出则退出码非 0）")
+    ap.add_argument("--no-clarify", action="store_true",
+                    help="关掉阶段二人工澄清（human_review），口径对齐阶段一冻结参考点")
     args = ap.parse_args()
+
+    if args.no_clarify:
+        # 阶段一的冻结参考点建立于阶段二之前，口径必须对齐：否则 evidence=none 的
+        # 样本会中断在 human_review 而不是落到 insufficient，落点统计整体失真。
+        # （阶段二自身的行为验证走 scripts/test_clarify_e2e.py，不要用本脚本。）
+        from app.config import settings
+        settings.human_review_enabled = False
 
     items = load_set(Path(args.set))
     print("=" * 78)
     print(f"样本集：{args.set}")
+    if args.no_clarify:
+        print("口径：--no-clarify 已关闭阶段二人工澄清（human_review）")
     print("=" * 78)
     describe_set(items)
 

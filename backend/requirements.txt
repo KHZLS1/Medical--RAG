@@ -20,6 +20,10 @@ langchain-text-splitters==1.1.2
 # ===== LangGraph（app/graph.py 检索状态图依赖） =====
 # 自动带上 langgraph-checkpoint / langgraph-prebuilt / langgraph-sdk
 langgraph==1.2.11
+langgraph-checkpoint-sqlite==3.1.1
+# AsyncSqliteSaver 依赖（langgraph.checkpoint.sqlite.aio）：SSE 流式链路
+# 走 graph.astream，同步 SqliteSaver 的 async 方法会抛 NotImplementedError
+aiosqlite==0.22.1
 
 # ===== 向量库 =====
 # 检索与写入均使用 pymilvus 原生 API（hybrid_search / insert），

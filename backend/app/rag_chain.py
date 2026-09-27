@@ -12,6 +12,8 @@
 """
 from typing import AsyncIterator
 
+import re
+
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -55,6 +57,55 @@ MEDICAL_PROMPT = """你是一名严谨、专业的医学助手。请仅基于【
 # 用法是**代码确定性追加**（answer.rstrip() + "\n\n" + DISCLAIMER），
 # 不让 LLM 生成——这样"有没有免责声明"是可断言的。
 DISCLAIMER = "⚠️ 本回答仅基于公开医学资料供参考，不能替代执业医师诊断，请结合实际情况就医。"
+
+# L2 判定存在"未被资料支持的句子"时追加的提示（阶段四）。
+# 由**代码确定性拼接**（不让 LLM 写）——与 DISCLAIMER 同一哲学：这样"有没有提示"可断言。
+GROUNDING_HEDGE = (
+    "⚠️ 说明：上述回答中的部分内容未能与本次检索到的资料完全对应，"
+    "请以执业医师的判断为准。"
+)
+
+# 引用编号。限 1~2 位：MEDICAL_PROMPT 的 context 最多给 5 条资料（reranker_top_k），
+# 两位数上限足够，且能避免把 "[2024]" 这种年份误判成编号。
+_CITE_RE = re.compile(r"\[(\d{1,2})\]")
+# 剥掉编号后可能留下 " 。" —— 只收敛"紧贴中文标点/右括号"的前导空格，不碰正文缩进
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"[ \t]+(?=[，。；、！？：）)】」])")
+_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+
+
+def check_citations(answer: str, sources: list[dict] | None) -> tuple[str, list[int], list[int]]:
+    """校验回答里的引用编号是否都能在 sources 里找到对应（纯函数，零 LLM）。
+
+    返回 (cleaned_answer, invalid, cited)：
+      invalid —— 越界编号（引用了不存在的资料），已从正文剥除；
+      cited   —— 出现过的全部编号（去重升序），供观测"漏标"（有资料却零引用）。
+
+    为什么合法编号集合取自 sources 里**实际的 index** 而不是 len(sources)：
+    index 是 _format_docs_with_sources 按 enumerate(start=1) 生成的，正常必然连续；
+    但载荷异常时（index 缺失）退化为 1..n，避免把整篇回答的编号全判成越界。
+
+    为什么"有 sources 但回答零引用"（漏标）不改文本：补一个引用编号等于**替模型
+    编出处**，比漏标更糟；那通常是模型没遵守规则 9，属 Prompt 层问题。
+    """
+    srcs = sources or []
+    valid = {
+        int(s["index"]) for s in srcs
+        if isinstance(s, dict) and str(s.get("index", "")).isdigit()
+    }
+    if not valid:
+        valid = set(range(1, len(srcs) + 1))
+
+    text = answer or ""
+    cited = sorted({int(m.group(1)) for m in _CITE_RE.finditer(text)})
+    invalid = [n for n in cited if n not in valid]
+    if not invalid:
+        return text, [], cited
+
+    bad = set(invalid)
+    cleaned = _CITE_RE.sub(lambda m: "" if int(m.group(1)) in bad else m.group(0), text)
+    cleaned = _SPACE_BEFORE_PUNCT_RE.sub("", cleaned)
+    cleaned = _MULTI_SPACE_RE.sub(" ", cleaned)
+    return cleaned, invalid, cited
 
 
 def _format_docs_with_sources(docs: list[Document]) -> tuple[str, list[dict]]:
@@ -222,13 +273,78 @@ def get_insufficient_chain():
     return _insufficient_chain
 
 
+# ============================================================================
+# 忠实性核查（阶段四 L2）：逐句核查回答里的医学论断是否有 context 依据
+# ============================================================================
+# 为什么默认关：每轮 +1~2s，且"未被支持"的判准本身有误报。先让 L1（确定性正则）
+# 跑一段、拿到 trace 里 unsupported 的分布，确认误报率可接受再开（先量、再改）。
+GROUNDEDNESS_PROMPT = """你是一个医学回答的事实核查员。
+
+【医学资料】（编号即回答中可引用的 [n]）
+{context}
+
+【待核查的回答】
+{answer}
+
+【任务】
+逐句检查【待核查的回答】中的**医学论断**（病因、症状、检查、用药、注意事项等）
+是否能在【医学资料】中找到直接依据。寒暄、承接、免责声明不计入。
+
+【输出】只输出一个 JSON 数组，元素是**不被支持**的句子序号（从 1 开始，按句子在
+回答中出现的顺序）。全部都有依据时输出 []。不要输出解释、不要输出代码块。
+示例：[2, 5]
+"""
+
+
+def build_groundedness_chain():
+    """忠实性核查链：{context, answer} -> JSON 数组字符串（L2，非流式）"""
+    llm = get_llm(temperature=0)
+    prompt = ChatPromptTemplate.from_template(GROUNDEDNESS_PROMPT)
+    return prompt | llm | StrOutputParser()
+
+
+_groundedness_chain = None
+
+
+def get_groundedness_chain():
+    global _groundedness_chain
+    if _groundedness_chain is None:
+        _groundedness_chain = build_groundedness_chain()
+    return _groundedness_chain
+
+
+def parse_unsupported(raw: str) -> list[int]:
+    """把 L2 的 JSON 数组输出解析成句子序号；任何异常一律返回 []（fail-open）。
+
+    fail-open 是刻意的：校验层是兜底，绝不能自己变成故障点——解析不了就当作
+    "全部有依据"，只打日志。宁可漏报，不可误报（误报会给好回答挂上"部分内容
+    未被支持"的提示，损害信任）。
+    """
+    import json
+    try:
+        text = (raw or "").strip()
+        if text.startswith("```"):
+            text = text.strip("` \n")
+            text = text.split("\n", 1)[-1] if text[:4].lower() == "json" else text
+        data = json.loads(text)
+        if not isinstance(data, list):
+            return []
+        return sorted({int(x) for x in data if str(x).strip().isdigit() and int(x) > 0})
+    except Exception as e:
+        print(f"[忠实性校验] 解析失败，按全部有依据处理: {type(e).__name__}: {e}")
+        return []
+
+
 async def stream_answer(
     question: str,
     history: list[dict] | None = None,
+    config: dict | None = None,
 ) -> AsyncIterator[str]:
     """流式问答生成器：全程走 LangGraph（意图分流 + 检索子图 + 生成节点）
 
     实现在 app.graph.astream_answer()，这里只做转发，保持 main.py 的调用方式不变。
+    config 为 LangGraph thread 配置（conversation_id → thread_id），checkpointer
+    开启时必传，由 main.py 组装。
 
     yield 顺序:
       1. {"type": "rewrite", "data": "..."}  改写后的检索词（仅医学路径有）
@@ -237,8 +353,13 @@ async def stream_answer(
          （末了可能再补一个 token：节点在流式内容之外追加的确定性文本，
            如兜底路径的免责声明，见 graph.node_answer_insufficient 的 answer_suffix）
       4. {"type": "sources", "data": [...]}  引用来源（最后一条；闲聊与兜底路径为空数组）
+      3.5 {"type": "clarification_request", "data": {...}}  ← 阶段二：证据不足中断，
+          出现即本轮结束（无 token / sources），等下一轮恢复
+      4.5 {"type": "correction", "data": {answer, invalid_citations, verdict}}
+          ← 阶段四：忠实性校验改了文本才出现（剥除越界引用 / 追加提示），
+          前端整段替换回答，main.py 覆盖落库文本
     """
     from .graph import astream_answer   # 延迟导入，避免与 graph 循环依赖
 
-    async for payload in astream_answer(question, history):
+    async for payload in astream_answer(question, history, config=config):
         yield payload

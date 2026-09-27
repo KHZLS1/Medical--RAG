@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from ..database import get_db
-from ..models import Conversation, ChatMessage
+from ..models import Conversation, ChatMessage, Feedback
 
 router = APIRouter(prefix="/api/conversations", tags=["会话管理"])
 
@@ -16,7 +16,7 @@ class UpdateConversationRequest(BaseModel):
     title: str
 
 # ===== 工具函数 =====
-def _message_to_dict(msg: ChatMessage) -> dict:
+def _message_to_dict(msg: ChatMessage, feedback: dict | None = None) -> dict:
     import json
     return {
         "id": msg.id,
@@ -24,7 +24,11 @@ def _message_to_dict(msg: ChatMessage) -> dict:
         "role": msg.role,
         "content": msg.content,
         "sources": json.loads(msg.sources) if msg.sources else None,
+        # 追问话术标记：前端据此恢复「🔎 请补充信息」徽章（阶段二）
+        "is_clarification": bool(msg.is_clarification),
         "created_at": msg.created_at.isoformat() if msg.created_at else None,
+        # 本条是否已有反馈：{id, thumbs}，assistant 消息可能为 null
+        "feedback": feedback,
     }
 
 def _conversation_to_dict(conv: Conversation) -> dict:
@@ -105,6 +109,15 @@ async def list_messages(conv_id: int, db: Session = Depends(get_db)):
         .order_by(ChatMessage.created_at.asc())
         .all()
     )
+
+    # 一次查出本会话所有反馈，前端用它恢复每条的已评价/点赞/撤回状态
+    feedback_by_msg = {
+        fb.message_id: {"id": fb.id, "thumbs": fb.thumbs}
+        for fb in db.query(Feedback)
+        .filter(Feedback.message_id.in_([m.id for m in messages]))
+        .all()
+    }
+
     return {
-        "messages": [_message_to_dict(m) for m in messages]
+        "messages": [_message_to_dict(m, feedback_by_msg.get(m.id)) for m in messages]
     }

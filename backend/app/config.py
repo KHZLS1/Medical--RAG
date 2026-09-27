@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # 数据路径
     medical_data_dir: str = "../Chinese-medical-dialogue-data-master/Data_数据"
     cleaned_data_dir: str = "data/by_department"
+    # 离线评估结果目录（展示大屏读最新一次评估的指标）
+    eval_dir: str = "data/eval"
 
     # 检索权重（eval_rag.py tune 可搜出最优值，写进 .env 或 tuned 文件生效）
     bm25_weight: float = 0.3
@@ -79,6 +81,38 @@ class Settings(BaseSettings):
     #   开 → 「它有什么副作用」这类被补全后才与文档可比（修 F 案例 0.355 的漏答）；
     #   关 → 全部用原始 question 打分（退回更保守的行为）。
     followup_score_with_enhanced: bool = True
+    # 自足问题（new_question）是否跳过改写、直接用原句检索（阶段一 §13.9 的"接线"）。
+    # 实测改写对自足问题是**净负收益**：无改写 hit_rate 0.92 / mrr 0.9067，
+    # 有改写 0.70~0.82；12 题有差异、0 题反向（符号检验 p≈0.016）。
+    #   开 → new_question 用原句检索，对齐冻结基线口径；followup 仍用改写补全指代。
+    #   关 → 退回"改写一律生效"（改写的 LLM 调用照做，只是产物被丢弃，零额外延迟）。
+    # 注意：dialogue_act_enabled=False 时本闸不生效（act 是恒定值而非真实分类，
+    # 不能据此断言"这题自足"），保持本阶段之前的"改写一律生效"行为。
+    rewrite_gate_on_act: bool = True
+
+    # ---- 指代消解（阶段三）----
+    # 焦点实体总开关。关掉 = 不消费 Prompt 的焦点行、不做改写退化兜底，
+    # 行为退回本阶段之前（注意 Prompt 已改成三行，需一并回滚 Prompt 才完全复原）。
+    # ⚠️ 依赖 dialogue_act_enabled：焦点要靠 act 判"更新还是保持"、判"是不是指代追问"，
+    #    阶段一关掉时本开关自动失效（见 graph.node_rewrite 的 focus_ok）。
+    focus_entity_enabled: bool = True
+
+    # ---- 忠实性校验（阶段四）----
+    # L1：引用编号可校验（确定性，零 LLM）。剥除越界编号并推 correction 事件。
+    groundedness_citation_check: bool = True
+    # L2：逐句忠实性核查（+1 次 LLM 调用 / 每次医学回答）。默认关——
+    #     先让 L1 跑一段、看 trace 里 unsupported 的分布，确认误报率可接受再开。
+    groundedness_llm_enabled: bool = False
+
+    # ---- 检查点与人工澄清（阶段二 / 咨询稿 A3）----
+    # LangGraph checkpointer 总开关。关掉 = 图不带 checkpointer 编译、
+    # 路由永不进 human_review，行为与本阶段之前完全一致。
+    graph_checkpointer_enabled: bool = True
+    graph_checkpointer_db_path: str = "data/cache/graph_checkpoints.sqlite"
+    # 证据不足时是否中断追问用户（依赖 graph_checkpointer_enabled）
+    human_review_enabled: bool = True
+    # 单轮最多追问次数（防「追问→还是没有→再追问」死循环）
+    human_review_max_rounds: int = 1
 
     # tune 输出最优权重的落盘路径（后端自动叠加到默认值）
     tuned_weights_path: str = "data/tuned_weights.json"
@@ -101,6 +135,11 @@ class Settings(BaseSettings):
     def cleaned_data_dir_resolved(self) -> Path:
         """返回清洗后数据的绝对路径"""
         return Path(__file__).resolve().parent.parent / self.cleaned_data_dir
+
+    @property
+    def eval_dir_resolved(self) -> Path:
+        """返回离线评估结果目录的绝对路径"""
+        return Path(__file__).resolve().parent.parent / self.eval_dir
 
     @property
     def milvus_uri(self) -> str:
