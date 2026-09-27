@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# 只跑「离线可验证」的部分：不依赖 Milvus / MySQL / LLM Key / GPU。
+# 需要全栈的脚本（test_clarify_e2e / test_backend_api / test_sse_via_proxy /
+# test_lifespan）刻意不进 CI —— 它们的跑法见 README「测试与自测」。
+jobs:
+  offline-tests:
+    name: 离线自测
+    runs-on: ubuntu-latest
+    env:
+      # 只为让 app.database 的 create_engine 拿到一个能解析的连接串。
+      # create_engine 是惰性的（不会真连），但串为空时它会直接抛错，
+      # 而 app.graph 会经 source_router 间接 import app.database。
+      DATABASE_URL: mysql+pymysql://ci:ci@127.0.0.1:3306/medical_rag_ci
+      LLM_API_KEY: ci-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 预装 CPU 版 torch
+        # 必须先装：直接装 requirements 时，sentence-transformers / FlagEmbedding
+        # 会把 Linux 上带 CUDA 依赖的 torch 拉下来（数个 GB）。先占位 CPU 版，
+        # pip 后续会复用，整个 job 能省下大半时间。
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 安装依赖
+        run: pip install -r backend/requirements.txt
+
+      - name: 阶段二 · 澄清中断与恢复
+        working-directory: backend
+        run: python scripts/test_clarify_flow.py
+
+      - name: 阶段三 · 跨轮焦点实体
+        working-directory: backend
+        run: python scripts/test_focus_entity.py
+
+      - name: 阶段四 · 忠实性校验 + 生成侧自省
+        working-directory: backend
+        run: python scripts/test_groundedness.py
+
+      - name: 改写缓存 · 指纹作废与冻结模式
+        working-directory: backend
+        run: python scripts/test_rewrite_cache.py
+
+      - name: 长对话历史摘要层
+        working-directory: backend
+        run: python scripts/test_history_summary.py
+
+  lint:
+    name: 静态检查（缺陷类）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install ruff
+
+      - name: ruff（仅 E9 + F）
+        # 只查「真缺陷」类：E9 = 语法/IO 错误，F = 未定义名、未使用导入、重复定义。
+        # 刻意不用完整规则集：本地跑全量会报 79 条风格类告警（import 排序 30、
+        # 盲 except 24、FastAPI 的 Depends 默认值 15 …），其中相当一部分是本项目
+        # 刻意为之的写法。清理它们要单独一轮 + 配规则白名单，不该混进 CI 首版；
+        # 先用最小集把"真会炸的东西"守住。
+        # scripts/ 不纳入：那几个测试脚本靠 `from x import y` 来验证可导入性，
+        # 未使用导入在那里是**故意的**。
+        run: ruff check --select E9,F backend/app

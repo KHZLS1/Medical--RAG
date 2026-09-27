@@ -1,11 +1,19 @@
-"""数据库模型：上传文档元数据、会话与消息"""
+"""数据库模型：上传文档元数据、会话与消息
+
+⚠️ 本文件是 schema 的**唯一声明**（`alembic revision --autogenerate` 以它为准）。
+   改字段后请立刻生成迁移；反过来，手工在库里执行 DDL 也要同步写回这里，
+   否则 autogenerate 会一直报漂移（本项目已踩过：真库里多出 content_hash 的
+   唯一索引与 feedback 的复合索引，而 models 没写）。
+"""
 from datetime import datetime
 
 from sqlalchemy import (
+    CHAR,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -18,6 +26,12 @@ from .database import Base
 class UploadedDocument(Base):
     """上传文档元数据表（文件本身保留在磁盘 uploads/ 目录）"""
     __tablename__ = "uploaded_documents"
+    # 内容哈希唯一：同一份文件重复上传直接挡在库层面（接口层给 409）。
+    # 这里保留显式名而不是交给命名的约定：该索引名已被 README 的升级 SQL 引用，
+    # 改名会让文档失效，收益不值。
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_uploads_content_hash"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
     filename = Column(String(255), nullable=False, comment="文件名")
@@ -25,7 +39,8 @@ class UploadedDocument(Base):
     file_type = Column(String(20), nullable=False, comment="文件扩展名")
     file_path = Column(String(500), nullable=False, comment="磁盘存储路径")
     uploaded_at = Column(DateTime, default=datetime.now, comment="上传时间")
-    content_hash = Column(String(64), nullable=True, comment="文件内容 SHA-256")
+    # CHAR 而非 VARCHAR：SHA-256 十六进制串定长 64，CHAR 更贴合且比较更快
+    content_hash = Column(CHAR(64), nullable=True, comment="文件内容 SHA-256")
 
 class Conversation(Base):
     """对话会话表"""
@@ -76,8 +91,11 @@ class Feedback(Base):
     __tablename__ = "feedback"
     # 一条助手消息只允许一条反馈：重复点 👍/👎 在库层面直接挡掉，
     # 业务上重复提交更新同一条记录而非再插一行（见 api/feedback.py submit_feedback）。
+    # 另有一条 (thumbs, created_at) 复合索引，服务反馈看板的"按评价 + 时间"统计，
+    # 之前只存在于真库、没进 models —— 那正是 autogenerate 报"要删掉它"的原因。
     __table_args__ = (
         UniqueConstraint("message_id", name="uq_feedback_message_id"),
+        Index("idx_feedback_thumbs_time", "thumbs", "created_at"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="主键ID")

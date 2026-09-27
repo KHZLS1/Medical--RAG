@@ -108,6 +108,77 @@ def check_citations(answer: str, sources: list[dict] | None) -> tuple[str, list[
     return cleaned, invalid, cited
 
 
+# ============================================================================
+# 生成侧自省后处理（T59 改道：partial 三档的替代方案）
+# ============================================================================
+# 背景：`partial` 三档原计划按 top_score 区间切，实测已证伪 —— 真·可回答
+# 0.658~1.000 与"库里沾边但答不了" 0.576 / 0.914 / 0.647 严重重叠，单靠分数切不开。
+# 于是退一步：不问"资料够不够"，只问"**模型自己有没有说答不上来**"——这是分数之外
+# 唯一确定性的信号。命中就把引用编号剥掉：编号本身真实存在（不算伪造出处），
+# 但它让"答不上来"看着有出处，与项目最初那个 bug（假 [1]）同源。
+#
+# 保守设计（宁可漏剥，不可误剥 —— 误剥会丢掉真回答的出处）：
+#   1. 只扫回答**开头** head_sentences 句。整篇答不上来的回答必然开头自陈；而
+#      "该药剂量资料未提供，其余如下…"这类中段提及说明主体答得上来，不该剥。
+#   2. 命中后剥**全部**编号（含合法编号），因为整篇没有可引之处。
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？!?\n]+")
+
+UNANSWERABLE_HINTS: tuple[str, ...] = (
+    # 「资料」作主语 + 否定谓语
+    "资料未提供", "资料中未提供", "资料里未提供",
+    "资料未包含", "资料中未包含", "资料里未包含",
+    "资料未涉及", "资料中未涉及",
+    "资料未提及", "资料中未提及", "资料里未提及",
+    "资料没有提及", "资料中没有提及", "资料里没有提及",
+    "资料中没有", "资料中无", "资料里没有",
+    "资料未明确", "资料中没有明确", "资料未说明", "资料中没有说明",
+    "资料不足以",
+    # 「找不到」类
+    "未找到相关", "没有找到相关", "未检索到", "没有检索到", "未能找到",
+    # 直接自陈无法作答
+    "无法回答该问题", "无法回答这个问题", "无法回答上述",
+    "无法给出确切", "无法确定该", "无法做出准确",
+    "现有医学资料无法", "现有资料无法", "以上资料无法", "无法从资料",
+)
+
+
+def detect_unanswerable(answer: str, head_sentences: int = 2) -> str:
+    """检测回答是否自认"现有资料答不了这个问题"（纯函数，零 LLM）。
+
+    只扫开头 head_sentences 句，是刻意加的位置约束：整篇答不上来的回答必然开头
+    就自陈，而出现在中后段的"资料未提供"通常只是某一小点的补充说明，不该据此
+    剥掉整篇的引用。
+
+    返回命中的短语（空串 = 未命中），供 trace 观测与单测断言。
+    """
+    text = (answer or "").strip()
+    if not text:
+        return ""
+    head = "".join(p for p in _SENTENCE_SPLIT_RE.split(text)[:head_sentences] if p)
+    if not head:
+        return ""
+    for hint in UNANSWERABLE_HINTS:
+        if hint in head:
+            return hint
+    return ""
+
+
+def strip_all_citations(answer: str) -> tuple[str, list[int]]:
+    """剥掉回答里**全部**引用编号（含合法编号），返回 (cleaned, 被剥编号)。
+
+    与 `check_citations` 的分工：那个只剥"sources 里不存在"的越界编号；这个剥全部，
+    因为它服务的是"整篇答不上来"这个判定 —— 此时没有任何编号有真实出处。
+    """
+    text = answer or ""
+    cited = sorted({int(m.group(1)) for m in _CITE_RE.finditer(text)})
+    if not cited:
+        return text, []
+    cleaned = _CITE_RE.sub("", text)
+    cleaned = _SPACE_BEFORE_PUNCT_RE.sub("", cleaned)
+    cleaned = _MULTI_SPACE_RE.sub(" ", cleaned)
+    return cleaned, cited
+
+
 def _format_docs_with_sources(docs: list[Document]) -> tuple[str, list[dict]]:
     """把检索到的文档格式化为带编号的 context，并返回来源元数据
 

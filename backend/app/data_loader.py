@@ -15,7 +15,6 @@
     └─ Surgical_外科/外科5-14000.csv
 """
 import csv
-import time
 from pathlib import Path
 from typing import Iterator
 

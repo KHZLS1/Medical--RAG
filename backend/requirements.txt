@@ -34,6 +34,9 @@ pymilvus==3.0.1
 sqlalchemy==2.0.30
 pymysql==1.1.0
 cryptography==42.0.5
+# 迁移工程化（alembic/versions 下为唯一 schema 真源；
+# 旧 migrate_*.sql 保留作历史记录，新变更一律走 alembic revision --autogenerate）
+alembic==1.20.0
 
 # ===== Embedding =====
 sentence-transformers==3.0.0

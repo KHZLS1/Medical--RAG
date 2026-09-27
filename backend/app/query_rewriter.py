@@ -299,6 +299,8 @@ def _invoke_rewrite(prompt_text: str, payload: dict, original: str) -> RewriteRe
 # ============================================================================
 _cache: RewriteCache | None = None
 _cache_ready = False
+# 冻结模式 miss 告警只打一次（见 _rewrite_cached）
+_frozen_miss_warned = False
 
 
 def _prompt_fingerprint() -> str:
@@ -317,16 +319,24 @@ def _prompt_fingerprint() -> str:
 
 
 def _get_cache() -> RewriteCache | None:
-    """惰性单例。未启用时返回 None，调用方按"无缓存"处理。"""
+    """惰性单例。未启用时返回 None，调用方按"无缓存"处理。
+
+    冻结模式（`settings.rewrite_cache_frozen`）下改用**独立**的冻结集文件、
+    只读加载、且不校验指纹 —— 目的是让 A/B 两边吃同一份改写结果，
+    详见 app/rewrite_cache.py 的「冻结模式」一节。
+    """
     global _cache, _cache_ready
     if _cache_ready:
         return _cache
     _cache_ready = True
     if settings.rewrite_cache_enabled:
+        frozen = settings.rewrite_cache_frozen
         _cache = RewriteCache(
-            settings.rewrite_cache_path_resolved,
+            settings.rewrite_frozen_path_resolved if frozen
+            else settings.rewrite_cache_path_resolved,
             fingerprint=_prompt_fingerprint(),
             max_entries=settings.rewrite_cache_max_entries,
+            frozen=frozen,
         )
     return _cache
 
@@ -357,6 +367,13 @@ def _rewrite_cached(kind: str, history_key: str, question: str,
                 # 旧缓存条目没有 focus 键 → 空串（阶段三兜底会退回下一层，安全）
                 focus_entity=hit.get("focus", ""),
             )
+        # 冻结模式下 miss = 冻结集不完整：本次会真调 LLM 且结果不落盘 ⇒ 该题不可复现。
+        # 只提醒一次，避免 50 题全 miss 时刷屏把真正的错误埋掉。
+        global _frozen_miss_warned
+        if cache.frozen and not _frozen_miss_warned:
+            _frozen_miss_warned = True
+            print("[改写缓存][警告] 冻结模式下未命中 —— 该题将调 LLM 重算且不落盘，"
+                  "本轮结果不可复现（冻结集不完整），请核对 stats 的 misses")
 
     result = _invoke_rewrite(prompt_text, payload, question)
     # 只固化"有效结果"和"契约退化"（LLM 确实给出了不合格输出，属确定性事实）。
@@ -501,15 +518,75 @@ CONTEXT_REWRITE_PROMPT = """你是一个医学对话上下文理解助手。
 {question}
 """
 
-def format_history(history: list[dict], max_turns: int = 6) -> str:
-    """将历史消息格式化为文本，只取最近 max_turns 条"""
-    # 取最近 N 条（用户+助手算2条，所以6条约3轮）
-    recent = history[-max_turns:] if len(history) > max_turns else history
+# ---- 长对话历史摘要（T61）----
+# format_history 原先只取最近 max_turns 条、更早的直接丢弃 —— 长对话里第 1 轮用户
+# 说的病情，到第 12 轮已经不在上下文里，改写节点看不见、回答也就失去了依据。
+# 这里把掉出窗口的旧消息压成**一行要点**补在最前面。
+#
+# 为什么不用 LLM 摘要：+1 次调用 + 随机性；而 format_history 的输出是**改写缓存的
+# 键**（见 _context_rewrite）—— 引入随机性等于把可复现性直接拆掉。
+# 所以只做确定性的"提取用户说过的话"：
+#   · 只留用户发言：助手回答动辄几百字、大量复述资料原文，压进来只会挤占窗口；
+#     而"用户提过什么"才是长对话里最该记住的（也是症状归属约束的依据）。
+#   · 逐条截断 + 条数上限：摘要本身必须有界，否则长会话会把它喂成第二个上下文。
+_OLDER_SUMMARY_MAX_ITEMS = 4
+_OLDER_SUMMARY_ITEM_CHARS = 40
+
+
+def _format_recent(history: list[dict]) -> str:
+    """窗口内逐条格式化（原 format_history 的行为，逐字保留）"""
     lines = []
-    for msg in recent:
+    for msg in history:
         role_label = "用户" if msg["role"] == "user" else "助手"
         lines.append(f"{role_label}: {msg['content']}")
     return "\n".join(lines) if lines else "（无历史对话）"
+
+
+def _summarize_older(history: list[dict],
+                     max_items: int = _OLDER_SUMMARY_MAX_ITEMS,
+                     item_chars: int = _OLDER_SUMMARY_ITEM_CHARS) -> str:
+    """把窗口外的旧消息压成一行要点（纯函数，零 LLM）。
+
+    从最近往前挑（保证留下的是较近的），同一句重复问过只计一次，最后还原成时间正序。
+    """
+    seen: set[str] = set()
+    picked: list[str] = []
+    for msg in reversed(history or []):
+        if msg.get("role") != "user":
+            continue
+        text = (msg.get("content") or "").strip().replace("\n", " ")
+        if not text:
+            continue
+        key = text[:20]
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(text[:item_chars])
+        if len(picked) >= max_items:
+            break
+    return "；".join(reversed(picked))
+
+
+def format_history(history: list[dict], max_turns: int = 6) -> str:
+    """将历史消息格式化为文本：窗口内逐条给出，窗口外压成一行要点。
+
+    ⚠️ 长度 ≤ max_turns 时**逐字走老路径**，输出与加摘要层之前完全一致 ——
+    本函数的返回值是改写缓存的键（见 _context_rewrite），输出一变，跨运行的可复现性
+    就断。因此摘要只在**真的发生截断**时才出现。
+    """
+    history = history or []
+    if len(history) <= max_turns:
+        return _format_recent(history)
+
+    older, recent = history[:-max_turns], history[-max_turns:]
+    recent_text = _format_recent(recent)
+    if not settings.history_summary_enabled:
+        return recent_text          # 回滚：精确退回旧行为（只取最近 max_turns 条）
+
+    summary = _summarize_older(older)
+    if not summary:
+        return recent_text
+    return f"（更早的对话要点）{summary}\n{recent_text}"
 
 @lru_cache(maxsize=256)
 def _context_rewrite(history_key: str, question: str) -> RewriteResult:

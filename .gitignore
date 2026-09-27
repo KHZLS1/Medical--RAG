@@ -48,6 +48,9 @@ Chinese-medical-dialogue-data-master/
 #   backend/data/eval/adversarial_set.json    手写 64 条 9 组对抗集
 #   backend/data/eval/weight_tuning.json      0.3/0.7 权重网格搜索的原始记录
 #   backend/data/eval/baselines/*.json        参考基线（eval compare 要读）
+#   backend/data/frozen/rewrite_frozen.json   冻结改写集（A/B 两边吃同一份改写结果的唯一保证；
+#                                             不绑 Prompt 指纹，故与 cache/ 区别对待，
+#                                             生成见 scripts/freeze_rewrite_cache.py）
 # 仍不入库：cache/（绑 Prompt 指纹，见 rewrite_cache.py）、history/、*_results.json、
 #           bm25_docs.pkl（516MB）、by_department/
 

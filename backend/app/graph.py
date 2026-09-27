@@ -538,21 +538,41 @@ def node_ground_check(state: GraphState) -> GraphState:
     ⚠️ 本节点**不得**加入 _astream_run 的 STREAMING_NODES：L2 会调 LLM，
     若被放行，核查输出会被当成回答推给前端（该项目已踩过两次，见模块 docstring）。
 
+    T59 改道（自省后处理）：`top_score` 切不开"可回答/答不上来"（实测重叠），
+    改为在生成侧判"模型自己有没有自认答不上来"，命中则剥掉**全部**编号 ——
+    见 rag_chain.detect_unanswerable 的说明。它排在 L1 之后：L1 剥"越界"，
+    本层处理"编号合法但整篇答不上来"。
+
     节点不写 answer_suffix：L1 的剥除与 L2 的追加提示**共用 corrected_answer
     这一个出口**，避免"correction 替换掉 suffix"的互相打架。
     """
     from .rag_chain import (   # 延迟导入，避免循环依赖
-        check_citations, GROUNDING_HEDGE, get_groundedness_chain, parse_unsupported,
+        check_citations, detect_unanswerable, strip_all_citations,
+        GROUNDING_HEDGE, get_groundedness_chain, parse_unsupported,
     )
 
     answer = state.get("answer") or ""
     final = answer
     invalid: list[int] = []
     cited: list[int] = []
+    stripped: list[int] = []
+    unanswerable = ""
 
     if settings.groundedness_citation_check:
+        # L1：越界编号（引用了不存在的资料）
         final, invalid, cited = check_citations(answer, state.get("sources"))
-    verdict = "citation_fixed" if invalid else "pass"
+        # T59：生成侧自省 —— 回答自认"资料答不了"却挂着编号，那是给"我不知道"
+        # 配的出处。先 L1 剥越界，本层再剥全部。
+        unanswerable = detect_unanswerable(final)
+        if unanswerable:
+            final, stripped = strip_all_citations(final)
+
+    if stripped:
+        verdict = "unanswerable_stripped"
+    elif invalid:
+        verdict = "citation_fixed"
+    else:
+        verdict = "pass"
 
     unsupported: list[int] = []
     if settings.groundedness_llm_enabled and final:
@@ -567,12 +587,15 @@ def node_ground_check(state: GraphState) -> GraphState:
             print(f"[忠实性校验] L2 调用失败，跳过: {type(e).__name__}: {e}")
         if unsupported:
             final = final.rstrip() + "\n\n" + GROUNDING_HEDGE
-            verdict = "citation_fixed+unsupported" if invalid else "unsupported"
+            verdict = "unsupported" if verdict == "pass" else f"{verdict}+unsupported"
 
     grounding = {
         "verdict": verdict,
         "cited": cited,
         "invalid_citations": invalid,
+        # T59：因"模型自认答不上来"被整篇剥除的编号（含原本合法的）
+        "stripped_citations": stripped,
+        "unanswerable_hit": unanswerable,
         "unsupported_sentences": unsupported,
         # 仅在**文本真的变了**时才给 corrected_answer：流式层据此决定要不要推
         # correction 事件。没变就不推 —— 保证"默认无行为变化"。
@@ -585,6 +608,8 @@ def node_ground_check(state: GraphState) -> GraphState:
             "verdict": verdict,
             "cited": cited or "（无）",
             "invalid": invalid or "（无）",
+            # 只在真的剥了才写，避免绝大多数正常回答的 trace 多两行噪音
+            **({"stripped": stripped, "hit": unanswerable} if stripped else {}),
             "unsupported": unsupported or "（无）",
         })],
     }

@@ -76,6 +76,8 @@ intent（纯规则 + LLM 分类） ───────┤                     
   `HUMAN_REVIEW_MAX_ROUNDS` 次，防「追问 → 还是没有 → 再追问」死循环。
 - **忠实性校验**：`generate → ground_check`。L1 用正则校验回答里的 `[n]` 是否都能在
   sources 里找到，越界编号由程序**确定性剥除**（不靠 Prompt 求模型守规矩）；
+  再加一层**生成侧自省**：回答开头就自认「资料未提供 / 无法回答」时，编号是真的、
+  但整篇没有可引之处，于是**整篇剥掉**（`unanswerable_stripped`）。
   L2（逐句核查论断是否有 context 支持，默认关）开启时额外调一次 LLM。
   文本真的变了才推 `correction` 事件，前端整段替换。
 
@@ -172,8 +174,12 @@ intent（纯规则 + LLM 分类） ───────┤                     
 召回 `k` 默认 20，融合后给 Reranker 的候选数为 `min(2k, 50)`。
 > 改动权重后需重启后端（`get_retriever` 带 `lru_cache`）。
 
-**MySQL 表**：`conversations` / `chat_messages` / `uploaded_documents` / `feedback`，
-由 SQLAlchemy 在后端启动时 `create_all`。
+**MySQL 表**：`conversations` / `chat_messages` / `uploaded_documents` / `feedback`。
+表结构声明在 `app/models.py`，变更由 **alembic** 管（见「运维与排错」）。
+后端启动仍会 `create_all` 兜底建表（幂等），但**改结构请走迁移**：
+只改 models 不会更新已存在的表 —— 项目里"真库比 models 多出两个索引、少一个外键"
+那类漂移就是这么来的（已于 `0f6e3b0d0396` 收敛，现 `alembic check` 零漂移）。
+**诊断漂移用 `python -m alembic check`**，比肉眼比对 information_schema 靠谱。
 
 ---
 
@@ -207,6 +213,9 @@ intent（纯规则 + LLM 分类） ───────┤                     
 │   │       ├── conversations.py # 会话增删改查
 │   │       ├── feedback.py      # 反馈（赞/踩、修正答案、备注、统计）
 │   │       └── stats.py         # GET /api/stats/overview（大屏单接口）
+│   ├── alembic/                # ★ 数据库迁移（env.py 复用 app 的 settings 与 Base.metadata）
+│   │   └── versions/           #   baseline + repair 两条 revision（详见「运维与排错」）
+│   ├── alembic.ini             # ⚠️ 保持纯 ASCII：alembic 用本地码页（中文 Windows 是 GBK）读它
 │   ├── scripts/                # 见下表
 │   ├── requirements.txt
 │   └── .env.example
@@ -220,6 +229,7 @@ intent（纯规则 + LLM 分类） ───────┤                     
 │       ├── api/chat.ts / api/stats.ts
 │       └── utils/time.ts        # 时间显示口径（见「运维与排错」）
 ├── docker-compose.yml           # Milvus standalone + etcd + minio
+├── .github/workflows/ci.yml     # CI：5 个离线自测 + ruff(E9,F)
 └── 实施计划_阶段{二,三,四}_*.md   # 各阶段设计与决策记录（本地工作副本，已被 .gitignore 排除）
 ```
 
@@ -237,8 +247,11 @@ intent（纯规则 + LLM 分类） ───────┤                     
 | `eval_dialogue.py` | 对话行为分流评测（对抗样本集混淆矩阵 + 落点正确率） |
 | `benchmark.py` | 分环节测速（GPU embedding vs Milvus 写入） |
 | `gen_dashboard_snapshot.py` | 生成大屏兜底快照 |
-| `migrate_feedback.py` / `migrate_clarification_flag.sql` | 幂等数据迁移 |
-| `test_*.py` | 离线自测（澄清流程 / 指代消解 / 忠实性校验 / lifespan / SSE 代理） |
+| `freeze_rewrite_cache.py` | 把当前改写缓存冻结成**入库快照**（A/B 两边吃同一份改写） |
+| `export_badcases.py` | 反馈差评 → JSONL 素材（badcase 回流，导完需人工筛选再进评估集） |
+| `cleanup_orphan_messages.py` | 审计指向已删会话的孤儿消息（默认 dry-run + 自动备份）；应急清理加 `--apply` |
+| `test_*.py` | 离线自测：澄清流程 / 指代消解 / 忠实性校验 / 改写缓存 / 历史摘要 / lifespan / SSE 代理 / 接口回归（哪些进 CI 见「测试与自测」） |
+| `migrate_feedback.py` / `migrate_clarification_flag.sql` | **【已废弃】** 手写 SQL 迁移，语义已并入 alembic baseline，留作历史记录 |
 | `gen_bm25_cache.py` | **【已废弃】** 旧的客户端 BM25 缓存脚本 |
 
 ---
@@ -320,6 +333,8 @@ cd frontend && npm install && npm run dev
 | `QUERY_REWRITE_ENABLED` | `true` | 关掉省一次 LLM 调用，但召回质量下降 |
 | `REWRITE_TEMPERATURE` | `0.0` | 改写**必须零温**；0.3 会让同题每次改写都不同 |
 | `REWRITE_CACHE_ENABLED` / `REWRITE_CACHE_PATH` | `true` / `data/cache/rewrite_cache.json` | 改写落盘复用 |
+| `REWRITE_CACHE_FROZEN` / `REWRITE_FROZEN_PATH` | `false` / `data/frozen/rewrite_frozen.json` | 冻结改写集：跳过指纹校验、只读加载，让 A/B 两边吃同一份改写（生成见 `scripts/freeze_rewrite_cache.py`） |
+| `HISTORY_SUMMARY_ENABLED` | `true` | 长对话历史摘要层：超出窗口的旧发言压成一行要点（纯确定性、零 LLM） |
 | `RELEVANCE_GATE_ENABLED` / `RERANK_SCORE_THRESHOLD` | `true` / `0.30` | 相关性闸门：低于阈值判「库中无相关内容」 |
 | `INTENT_GATE_ENABLED` / `INTENT_CHAT_MAX_CHARS` | `true` / `8` | 规则门：会话语短路 |
 | `DIALOGUE_ACT_ENABLED` | `true` | 对话行为分流总开关 |
@@ -396,7 +411,8 @@ python scripts/eval_rag.py summary                             # 汇总各模式
 当前基线（`data/eval/baselines/hybrid_rerank.json`）：
 `hit_rate 0.92 / mrr 0.9067 / similarity 0.75 / coverage 0.4402 / latency 12.56s`，
 `meta.rewrite=false`。选它是因为它是**唯一确定性**的口径（检索路径不含 LLM）。
-> ⚠️ 阶段三改过改写 Prompt ⇒ **该基线已失效**，需重跑 `eval_rag` 再 `--promote`。
+> 阶段三改改写 Prompt 时曾担心基线作废，但 2026-09-27 全量复跑实测
+> **hit_rate / mrr 与基线逐位一致** —— 这个口径本就不调改写，所以基线继续有效。
 > 对比时务必报出 `meta.rewrite` 配置差异。
 
 ### 对话行为（`eval_dialogue.py`）
@@ -418,15 +434,30 @@ python scripts/eval_dialogue.py                        # 全量（约 15min）
 `--json` 默认落盘 `data/eval/dialogue_results.json`，**读逐条前先核对
 `generated_at` / `elapsed_sec` 是否等于本次 stdout 总耗时**。
 
+### badcase 回流（`export_badcases.py`）
+
+```bash
+python scripts/export_badcases.py                  # 差评 → data/eval/badcases.jsonl
+python scripts/export_badcases.py --include-up     # 连好评一起导（做对照）
+```
+
+导出的是**素材**、不是评估集：反馈是主观判断，直接入库等于把「用户当时的口味」
+固化成「正确答案」，指标会失真。逐条判断属于「检索错 / 生成错 / 口味问题」后，
+前者补 `eval_testset`、中者补对抗集或当标定素材、后者直接丢。
+
 ### ⚠️ 关于「可复现」的两条硬结论
 
 1. **`temperature=0` ≠ 可复现**。实测同一 Prompt、同 50 题连算两次，改写完全一致的
    仅 **1/50（2%）**，平均字符相似度 0.638。MoE 路由 / 批大小本身就让贪婪解码不确定。
 2. **可复现只能靠「冻结输入」**。`app/rewrite_cache.py` 是唯一来源：命中 ⇒ 逐字一致 ⇒
    指标可比。指纹（Prompt / 模型 / 温度）一变整表作废。
-   > 指纹已因阶段三的「焦点：」行刷新：`ff58f0485b2954ca`(105 条) → `20930910b4dc2016`(57 条)，
-   > 旧冻结集作废、覆盖需重验。强制重算：删 `backend/data/cache/rewrite_cache.json`；
-   > 关闭：`REWRITE_CACHE_ENABLED=false`。
+   > 指纹已因阶段三的「焦点：」行刷新：`ff58f0485b2954ca`(105 条) → `20930910b4dc2016`(57 条)。
+   > 强制重算：删 `backend/data/cache/rewrite_cache.json`；关闭：`REWRITE_CACHE_ENABLED=false`。
+
+   **做 A/B 时用冻结集**（`REWRITE_CACHE_FROZEN=true`）：它跳过指纹校验、只读加载
+   `data/frozen/rewrite_frozen.json`，于是改写 Prompt 怎么改，两边吃的都是同一份改写结果。
+   生成/更新快照：`python scripts/freeze_rewrite_cache.py` 然后 `git add -f`。
+   ⚠️ 要求**全命中**：跑完看报告里的 `misses`，非 0 就说明冻结集不完整、那几题本轮不可复现。
 
 **做 A/B 前请记住**：`hit_rate` / `mrr` 只依赖检索集，唯一随机源是查询改写。
 有改写时 `hit_rate` 的噪声区间约 **0.70~0.82（跨度 6 题）** ⇒ **差距小于 6 题不算证据**；
@@ -436,19 +467,24 @@ python scripts/eval_dialogue.py                        # 全量（约 15min）
 
 ## 测试与自测
 
-离线自测（不需要 Milvus / LLM / MySQL，秒级）：
+离线自测（不需要 Milvus / LLM / MySQL，秒级，全部进 CI）：
 
 ```bash
 cd backend
-python scripts/test_clarify_flow.py     # 阶段二：澄清中断与恢复
+python scripts/test_clarify_flow.py     # 阶段二：澄清中断与恢复（含 checkpoint 快照清理）
 python scripts/test_focus_entity.py     # 阶段三：跨轮焦点实体
-python scripts/test_groundedness.py     # 阶段四：引用编号校验与剥除
-python scripts/test_lifespan.py         # 启动钩子
+python scripts/test_groundedness.py     # 阶段四：越界引用剥除 + 生成侧自省后处理
+python scripts/test_rewrite_cache.py    # 改写缓存：指纹作废 / 冻结模式只读绕过
+python scripts/test_history_summary.py  # 长对话历史摘要层
 ```
+
+> ⚠️ `test_lifespan.py` **不在**上面这组里 —— 它会真连 MySQL / Milvus / LLM 并建表，
+> 属于全栈自测（它曾经被误列在离线组里）。
 
 需要全栈的自测：
 
 ```bash
+python scripts/test_lifespan.py         # 启动钩子（MySQL + Milvus + LLM Key）
 python scripts/test_clarify_e2e.py      # 端到端澄清（需后端 + Milvus + LLM Key）
 python scripts/test_backend_api.py      # 旧接口回归
 python scripts/test_sse_via_proxy.py    # 经 Vite proxy 验证 SSE 流式
@@ -481,16 +517,43 @@ python scripts/test_sse_via_proxy.py    # 经 Vite proxy 验证 SSE 流式
 - 彻底清空（含数据卷）：`docker compose down -v`
 - 删除单条 / 单科室：按 `metadata["department"]` / `metadata["filename"]` 过滤删除
 
-**已有数据库升级**（旧版本 `uploaded_documents` 补 `content_hash` 列）
+**数据库迁移（Alembic）**
 
-```sql
-ALTER TABLE uploaded_documents
-  ADD COLUMN content_hash CHAR(64) NULL AFTER file_path,
-  ADD UNIQUE KEY uq_uploads_content_hash (content_hash);
+schema 的唯一声明是 `backend/app/models.py`，结构变更走 alembic：
+
+```bash
+cd backend
+python -m alembic current                              # 当前库处于哪个版本
+python -m alembic check                                # ★ 漂移体检：真库 vs models 有无差异
+python -m alembic upgrade head                         # 新库：一次建出全部表
+python -m alembic stamp head                           # 既有库：只记版本号，不执行 DDL
+python -m alembic revision --autogenerate -m "说明"     # 改完 models 后生成迁移
+python -m alembic downgrade -1                         # 回退一步
 ```
 
-> 若表内已有重复内容的历史数据，唯一索引会建失败，需先清理。
-> 反馈表相关的幂等迁移见 `scripts/migrate_feedback.py`。
+当前两条 revision（真库与 `alembic check` 均已零漂移）：
+
+| revision | 作用 |
+|---|---|
+| `e03c5380d2c8` baseline | 一次建出四张表 + 索引 + 外键。刻意保留真库的**历史形态**：`chat_messages.conversation_id` nullable 且无外键（该表建库早于 `ForeignKey(...)` 声明，`create_all` 不补结构） |
+| `0f6e3b0d0396` repair | 收敛到 models 最终形态：**清孤儿 → 收紧 NOT NULL → 补 `fk_chat_messages_conversation_id`**。对空库是空转，对旧库是一步到位 |
+
+> ⚠️ `0f6e3b0d0396` 的 `upgrade` 会**删数据**（清 `conversation_id` 悬空的孤儿消息，
+> 实测真库 21 条）。执行前先跑 `python scripts/cleanup_orphan_messages.py`
+> 看清单并导出备份（2026-09-27 那次：`data/backup/orphan_messages_20260927_225931.json`）。
+> 孤儿在业务上不可达（前端按 `conversation_id` 拉消息），删除不影响任何可见内容。
+> `downgrade` 只回退结构，**不还原**被删的行。
+> 外键建起后孤儿不会再产生，该脚本从此是「审计 + 备份」工具而非常规清理手段。
+
+> **已有数据的库不要 `upgrade`**（表已存在会报错），用 `stamp head` 接管 ——
+> 它只往 `alembic_version` 写版本号，不碰任何表。stamp 之后再用 `upgrade head`
+> 补上后续 revision（真库就是这么从 baseline 走到 `0f6e3b0d0396` 的）。
+> `alembic/env.py` 直接复用 `app.config.settings`，连接串**不写进** `alembic.ini`
+> （一份真相、也不让密码进版本库）。
+> ⚠️ `alembic.ini` 必须保持**纯 ASCII**：alembic 用本地码页（中文 Windows 是 GBK）
+> 读它，写中文注释会直接 `UnicodeDecodeError: 'gbk' codec`（已踩）。
+> 旧库那批手工 DDL（`content_hash`、feedback 唯一约束与复合索引）语义已并入 baseline，
+> `scripts/migrate_*.sql` 只作历史记录，新库不再需要执行。
 
 **查看与检索自测**
 
@@ -527,13 +590,20 @@ python scripts/check_data.py --query "头痛怎么办" --mode hybrid --k 5
 
 ## 已知限制
 
-- **证据二档偏粗**：「有主题相关的文档」≠「文档能回答这个问题」。主题沾边但答不了的
-  情况 `top_score` 依然很高（实测 0.576 / 0.914 / 0.647，与真·可回答的 0.658~1.000 重叠），
-  判 strong 后仍会走 `MEDICAL_PROMPT` 并在「我不知道」上挂 `[1][2][3][4][5]`。
-  单靠 `top_score` 切不开，「partial 按区间切」已证伪。
-  候选方向：覆盖度信号 / 生成侧自省后处理（出现「资料未提供」就剥引用，确定性可断言）。
-- **冻结集未进版本库的加载开关缺失**：`rewrite_cache_path` 已可配，但还缺「入库快照 +
-  绕过指纹的加载开关」。
-- **评估不可复现**：见上文两条硬结论，A/B 必须走冻结集且注意噪声下限。
+- **证据二档偏粗，`partial` 改走生成侧**：「有主题相关的文档」≠「文档能回答这个问题」。
+  主题沾边但答不了时 `top_score` 依然很高（实测 0.576 / 0.914 / 0.647，与真·可回答的
+  0.658~1.000 重叠），判 strong 后仍会走 `MEDICAL_PROMPT`，而规则 9 无条件要求标引用 ⇒
+  「我不知道」也挂上 `[1][2][3][4][5]`。
+  按分数区间切 `partial` 的方案**已实测证伪**，改由**生成侧自省**兜住：
+  `detect_unanswerable()` 扫回答开头两句，命中「资料未提供 / 无法回答」这类自陈就
+  **整篇剥掉引用编号**（复用阶段四的 `correction` 出口，确定性、可断言、零 LLM）。
+  残留局限：措辞是白名单，模型换个说法自认答不上来时仍会漏剥 —— 方向是刻意选的
+  （宁可漏剥、不可误剥，误剥会丢掉真回答的出处）。
+- **评估不可复现**：`temperature=0` ≠ 可复现，唯一来源是改写缓存；而缓存绑 Prompt
+  指纹，指纹一变整表作废、参考点跟着重置。现已支持**冻结集**
+  （`REWRITE_CACHE_FROZEN=true`：跳过指纹校验 + 只读不落盘，可 `git add -f` 入库），
+  A/B 两边才有同一份输入。详见「评估与调优」的两条硬结论与噪声下限。
 - **L2 忠实性核查默认关闭**：先让 L1 跑一段，看 trace 里 unsupported 的分布，
   确认误报率可接受再开。
+- **长对话的早期细节仍会丢**：历史摘要层只保留窗口外**用户**发言的前 40 字、最多 4 条；
+  更早的助手回答内容不保留（压进来只会挤占窗口）。

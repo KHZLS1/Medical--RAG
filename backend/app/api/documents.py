@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from ..data_loader import (
     save_upload_file,
-    list_uploaded_files,
     delete_uploaded_file,
     load_single_file,
     is_allowed_file,

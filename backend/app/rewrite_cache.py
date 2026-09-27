@@ -27,6 +27,15 @@ judge=false 时完全不调用 LLM）。也就是说，评估链路里**唯一�
 缓存作废重算。prompt 一改就自动重算，不会拿着旧结果骗自己。
 条目数超过上限时按插入顺序淘汰最旧的（Python dict 保持插入序）。
 
+冻结模式（`frozen=True`）
+------------------------
+上面那条"指纹一变整表作废"的规则，在**做 A/B 对比**时会反噬：改一版 Prompt 指纹就变，
+两边的输入不再相同，"谁更好"里混进了"喂的改写词不一样"。冻结模式把某次运行的结果
+用 `git add -f` 入库成快照，加载时**跳过指纹校验**并**只读**（不回写），
+于是无论 Prompt 怎么改，A/B 两边都吃同一份改写结果。
+⚠️ 冻结模式要求**全命中**：miss 会真调 LLM，而结果不落盘 ⇒ 那几题本轮不可复现。
+   加载后请看 `stats["misses"]`，非 0 就说明冻结集不完整。
+
 并发说明
 --------
 后端与评估脚本可能同时读写同一文件。写入用「临时文件 + os.replace」原子替换，
@@ -50,10 +59,17 @@ class RewriteCache:
     """
 
     def __init__(self, path: str | Path, fingerprint: str,
-                 max_entries: int = DEFAULT_MAX_ENTRIES):
+                 max_entries: int = DEFAULT_MAX_ENTRIES, frozen: bool = False):
         self.path = Path(path)
         self.fingerprint = fingerprint
         self.max_entries = max_entries
+        # 冻结模式：把一份已入库的改写结果当**只读输入**——加载时跳过指纹校验、
+        # 命中即逐字复用。两个理由：
+        #   1. 指纹一变（改 Prompt）整表作废，A/B 两边就吃不到同一份改写结果了；
+        #      冻结模式让"当次冻结的输入"跨 Prompt 改动仍然可用。
+        #   2. 只读是必须的：若允许回写，一次 miss 就把新指纹的条目混进来，
+        #      "冻结集"就退化成"又一份普通缓存"，失去了可比性保证。
+        self.frozen = frozen
         self._entries: dict[str, dict] = {}
         self.hits = 0
         self.misses = 0
@@ -86,24 +102,33 @@ class RewriteCache:
         }
         while len(self._entries) > self.max_entries:
             self._entries.pop(next(iter(self._entries)))   # 淘汰最旧的
+        if self.frozen:
+            return          # 只读：内存里留着（本次进程内可命中），但不落盘
         self._save()
 
     @property
     def stats(self) -> dict:
         return {"size": len(self._entries), "hits": self.hits, "misses": self.misses,
-                "path": str(self.path)}
+                "frozen": self.frozen, "path": str(self.path)}
 
     # ---------- 落盘 ----------
     def _load(self) -> None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
+            if self.frozen:
+                print(f"[改写缓存][警告] 冻结集不存在: {self.path} —— 本次全部重算，"
+                      "结果不可复现")
             return
         except Exception as e:
             print(f"[改写缓存] 读取失败，按空缓存处理: {e}")
             return
 
-        if (data.get("meta") or {}).get("fingerprint") != self.fingerprint:
+        if self.frozen:
+            # 冻结模式刻意跳过指纹校验：这正是"跨 Prompt 改动仍可复用"的实现方式。
+            # 代价是失去了"拿旧结果骗自己"的自动保护 —— 所以它必须显式打开。
+            print(f"[改写缓存] 冻结模式：跳过指纹校验，只读加载 {self.path.name}")
+        elif (data.get("meta") or {}).get("fingerprint") != self.fingerprint:
             print("[改写缓存] Prompt/模型/温度指纹已变 → 旧缓存作废，本次全部重算")
             return
         entries = data.get("entries")

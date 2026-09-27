@@ -1,0 +1,465 @@
+{
+ "meta": {
+  "fingerprint": "20930910b4dc2016",
+  "count": 57,
+  "note": "按 (kind,history,question) 缓存改写结果；改 Prompt/模型/温度会自动作废"
+ },
+ "entries": {
+  "b862cda3eba54993": {
+   "q": "小孩发烧39度怎么办",
+   "query": "小儿 发热 39度 处理 退热 急诊 指征",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "小儿发热"
+  },
+  "ef6b63335bfb6c96": {
+   "q": "算了，先不问了",
+   "query": "算了，先不问了",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": ""
+  },
+  "7e4dce8dc47c4786": {
+   "q": "这些药我先用不着",
+   "query": "湿疹 药膏 暂不使用",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": "湿疹 药膏"
+  },
+  "a379dbeeac119c5c": {
+   "q": "我再想想吧",
+   "query": "我再想想吧",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": "颈椎病"
+  },
+  "aa4261316bab3812": {
+   "q": "那就先这样",
+   "query": "那就先这样",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": "荨麻疹"
+  },
+  "9270f037acb2ff24": {
+   "q": "不用了，我看看再说",
+   "query": "不用了，我看看再说",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": ""
+  },
+  "0fe4fb8f0e62625a": {
+   "q": "好，我按你说的做",
+   "query": "好，我按你说的做",
+   "degraded": false,
+   "reason": "",
+   "act": "ack",
+   "focus": ""
+  },
+  "c1a59fb1d9806fb6": {
+   "q": "你是医生吗",
+   "query": "你是医生吗",
+   "degraded": false,
+   "reason": "",
+   "act": "chitchat",
+   "focus": ""
+  },
+  "bf4655adb0d4a6a3": {
+   "q": "你真厉害",
+   "query": "你真厉害",
+   "degraded": false,
+   "reason": "",
+   "act": "chitchat",
+   "focus": ""
+  },
+  "169911c9e3fc3436": {
+   "q": "你是机器人吧",
+   "query": "你是机器人吧",
+   "degraded": false,
+   "reason": "",
+   "act": "chitchat",
+   "focus": ""
+  },
+  "ce84c59439c69883": {
+   "q": "改天聊，拜拜",
+   "query": "改天聊，拜拜",
+   "degraded": false,
+   "reason": "",
+   "act": "chitchat",
+   "focus": ""
+  },
+  "7bda1a3765f056e6": {
+   "q": "它有什么副作用",
+   "query": "党参 副作用 禁忌 高血压患者服用注意事项",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "党参 副作用"
+  },
+  "dc4949e4cb39276b": {
+   "q": "那平时要注意什么",
+   "query": "孩子发烧 平时 注意事项 预防 护理",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "孩子发烧"
+  },
+  "22d811ee1ebd94e4": {
+   "q": "需要做胃镜吗",
+   "query": "慢性胃炎患者需要做胃镜吗",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "慢性胃炎"
+  },
+  "05d2529489f06435": {
+   "q": "这个病会传染吗",
+   "query": "荨麻疹会传染吗",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "荨麻疹"
+  },
+  "19fe784769aa3b07": {
+   "q": "要拍片子吗",
+   "query": "颈椎病 是否需要拍片 影像学检查 诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "颈椎病"
+  },
+  "6d6ac06d1a161364": {
+   "q": "那饮食上呢",
+   "query": "痛风 饮食 注意事项 低嘌呤饮食 具体建议",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "痛风 饮食"
+  },
+  "6714aefded2ae360": {
+   "q": "要吃安眠药吗",
+   "query": "长期失眠 是否需要服用安眠药 治疗建议",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "长期失眠"
+  },
+  "a85777ffd375ab6d": {
+   "q": "它和过敏有关吗",
+   "query": "干眼症和过敏有关吗",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "干眼症"
+  },
+  "9475ce684df60c86": {
+   "q": "需要手术吗",
+   "query": "甲状腺结节 需要手术吗 手术指征",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "甲状腺结节"
+  },
+  "fbef4d4605be811d": {
+   "q": "用的药膏含激素吗",
+   "query": "湿疹用的药膏含激素吗",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "湿疹 药膏 激素"
+  },
+  "ac71da2bab21c28a": {
+   "q": "小孩反复咳嗽有痰怎么办",
+   "query": "小孩反复咳嗽有痰怎么办",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "小孩 反复咳嗽 有痰"
+  },
+  "d4c5fa47f78e377b": {
+   "q": "成年人糖尿病能吃西瓜吗",
+   "query": "成年人糖尿病 能吃西瓜吗 血糖影响 注意事项",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "糖尿病 西瓜"
+  },
+  "f022373e8fad8e49": {
+   "q": "最近腰痛得厉害是什么原因",
+   "query": "腰痛 原因 鉴别诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "腰痛"
+  },
+  "43d7555e321fc013": {
+   "q": "高血压患者能不能喝浓茶",
+   "query": "高血压患者能不能喝浓茶",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "高血压 浓茶"
+  },
+  "b1faf01cbcf5b571": {
+   "q": "月经推迟半个月正常吗",
+   "query": "月经推迟半个月正常吗 可能原因 是否需要就医",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "月经推迟"
+  },
+  "89937b153a0c5cc3": {
+   "q": "脸上长了很多痘怎么调理",
+   "query": "脸上长了很多痘痘怎么调理 痤疮 饮食 护肤 调理方法",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "痤疮 面部痘痘"
+  },
+  "8b64146a1f314f2e": {
+   "q": "体检发现胆结石需要处理吗",
+   "query": "体检发现胆结石需要处理吗 无症状胆结石 治疗指征",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "胆结石"
+  },
+  "ca86c6bf4652c51f": {
+   "q": "老人白内障什么时候该做手术",
+   "query": "老人白内障 手术时机 适应症 什么时候做手术",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "白内障"
+  },
+  "129641692f5ffbba": {
+   "q": "小孩长牙发烧要吃药吗",
+   "query": "小孩长牙引起的发烧需要吃药吗",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "小孩长牙发烧"
+  },
+  "1b128d3721751949": {
+   "q": "总是反酸烧心是胃病吗",
+   "query": "总是反酸烧心是胃病吗 反酸烧心 病因 诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "反酸烧心 胃病"
+  },
+  "c019c09ffdeedbe4": {
+   "q": "库欣病经蝶窦手术后的皮质醇缓解判定标准是什么",
+   "query": "库欣病 经蝶窦手术后 皮质醇缓解 判定标准",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "库欣病 经蝶窦手术 皮质醇缓解"
+  },
+  "ea4df1e873584bd4": {
+   "q": "抗NMDAR脑炎的二线免疫治疗方案和疗程是多久",
+   "query": "抗NMDAR脑炎 二线免疫治疗 方案 疗程 持续时间",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "抗NMDAR脑炎"
+  },
+  "e2f2a2be68a4318c": {
+   "q": "脊髓性肌萎缩症用诺西那生钠的鞘内注射剂量怎么计算",
+   "query": "脊髓性肌萎缩症 诺西那生钠 鞘内注射 剂量 计算 给药方案",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "脊髓性肌萎缩症 诺西那生钠"
+  },
+  "be534684024f2728": {
+   "q": "特发性肺纤维化用吡非尼酮的起始剂量和加量方案",
+   "query": "特发性肺纤维化 吡非尼酮 起始剂量 加量方案 用药指导",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "特发性肺纤维化 吡非尼酮"
+  },
+  "6694e195d7bb5394": {
+   "q": "遗传性血管性水肿的长期预防用药怎么选",
+   "query": "遗传性血管性水肿 长期预防 用药选择 治疗药物",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "遗传性血管性水肿"
+  },
+  "5819dee0415b94ab": {
+   "q": "嗜酸性肉芽肿性多血管炎维持缓解期用什么药",
+   "query": "嗜酸性肉芽肿性多血管炎 维持缓解期 治疗药物 缓解期维持用药",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "嗜酸性肉芽肿性多血管炎"
+  },
+  "12ba252f45066619": {
+   "q": "法布里病酶替代治疗的输注间隔是多久一次",
+   "query": "法布里病 酶替代治疗 输注间隔 频率 多久一次",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "法布里病 酶替代治疗"
+  },
+  "4c527b4f6f7ea27a": {
+   "q": "CAR-T治疗复发难治多发性骨髓瘤的完全缓解率是多少",
+   "query": "CAR-T疗法 复发难治多发性骨髓瘤 完全缓解率 疗效",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "CAR-T 复发难治多发性骨髓瘤"
+  },
+  "c0219077b5e00847": {
+   "q": "经导管二尖瓣钳夹术的适应症和禁忌症有哪些",
+   "query": "经导管二尖瓣钳夹术 适应症 禁忌症",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "经导管二尖瓣钳夹术"
+  },
+  "198468c3265b8f0f": {
+   "q": "结节性硬化症相关肾血管平滑肌脂肪瘤的处理原则",
+   "query": "结节性硬化症相关肾血管平滑肌脂肪瘤的处理原则",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "结节性硬化症 肾血管平滑肌脂肪瘤"
+  },
+  "a4251e9a3b4c4d37": {
+   "q": "头痛",
+   "query": "头痛",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "头痛"
+  },
+  "4f5e460c996b2de5": {
+   "q": "牙疼",
+   "query": "牙疼 病因 治疗 鉴别诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "牙疼"
+  },
+  "54d4c44b63e3b3ff": {
+   "q": "咳嗽",
+   "query": "咳嗽 症状 病因 治疗",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "咳嗽"
+  },
+  "c8d0957ab970592b": {
+   "q": "发烧了",
+   "query": "发烧 发热 病因 处理",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": ""
+  },
+  "13588e75bf019350": {
+   "q": "肚子痛",
+   "query": "腹痛 腹部疼痛 病因 鉴别诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": ""
+  },
+  "b2c8d803731e8bee": {
+   "q": "拉肚子",
+   "query": "腹泻 拉肚子 病因 治疗",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "拉肚子"
+  },
+  "dd634ac5b3b4162b": {
+   "q": "失眠",
+   "query": "失眠 睡眠障碍 入睡困难 治疗",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "失眠"
+  },
+  "842416380db70a98": {
+   "q": "好痛",
+   "query": "疼痛",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "疼痛"
+  },
+  "bcf663c48a5215c7": {
+   "q": "有点晕",
+   "query": "头晕",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": ""
+  },
+  "68a9a6e6500e8156": {
+   "q": "血糖高怎么办",
+   "query": "血糖高 处理方法 治疗 控制血糖",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "血糖高"
+  },
+  "21ea4d3e44e832bf": {
+   "q": "好恶心",
+   "query": "恶心 原因 鉴别诊断",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "恶心"
+  },
+  "ade75648b9bc6d19": {
+   "q": "好困",
+   "query": "困倦 嗜睡 原因 缓解",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "困倦"
+  },
+  "068de2aa579d8549": {
+   "q": "好难受",
+   "query": "好难受 不适 症状",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": ""
+  },
+  "a9f1247b46a98b87": {
+   "q": "好胀",
+   "query": "腹胀",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": ""
+  },
+  "d32700b1862110d9": {
+   "q": "高血压患者平时要注意什么？",
+   "query": "高血压 患者 日常 注意事项 生活方式 饮食 运动 血压管理",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "高血压"
+  },
+  "09c21ca080f5f839": {
+   "q": "糖尿病患者的饮食要注意什么？",
+   "query": "糖尿病患者的饮食注意事项",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "糖尿病 饮食"
+  }
+ }
+}

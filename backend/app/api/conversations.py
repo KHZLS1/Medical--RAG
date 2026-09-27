@@ -85,13 +85,24 @@ async def update_conversation(
 
 @router.delete("/{conv_id}", summary="删除会话")
 async def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
-    """删除会话及其所有消息（消息由 relationship 的 cascade 级联删除）"""
+    """删除会话及其所有消息（消息由 relationship 的 cascade 级联删除）
+
+    同时清理该会话在 LangGraph checkpointer 里的快照 —— 那是**独立于 MySQL** 的
+    sqlite 存储，不清理会一直堆积（每轮都把 docs/context 全文写进去）。
+    清理失败不影响删除本身（见 checkpointer.delete_thread）。
+    """
     conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     db.delete(conv)   # cascade="all, delete-orphan" 会一并删除关联消息
     db.commit()
+
+    # 放在业务删除**之后**：即使这步失败，会话也已经真的删掉了，
+    # 不会出现"点了删除却没反应"。若删会话后仍收到该 conversation_id 的提问，
+    # main.py 会按 404 处理（会话不存在），不会拿着残留快照误判成 resume。
+    from ..checkpointer import delete_thread
+    await delete_thread(conv_id)
 
     return {"deleted": conv_id}
 

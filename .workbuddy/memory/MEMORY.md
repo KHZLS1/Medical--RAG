@@ -46,9 +46,9 @@
 ## 对抗评测（样本集 65 条/9 组，严禁取自语料）
 **09-27 全量复跑（最新分母）**：act **54/54=100%**、落点 **59/62=95.2%**、**方向性错误 0 条 ✅**、引用一致性 ✅、规则门拦 11 条**零误伤**、17.2s/条、缓存 **54 hits/0 misses（可复现）**。落点不符 3 条均为「裸症状主诉/库外被判有资料」：`ooc-05`(0.330)、`sm-08`「好痛」(0.501)、`gm-03`「好难受」(0.523) → **阈值问题，非分类问题**。⚠️ 旧分母 55/55、59/61 **已不适用**（样本集与规则门有调整）。
 
-### 需注意：`evidence=strong` 不等同于「可回答」（= 阶段二入口）
-**「有主题相关的文档」≠「文档能回答这个问题」**：ooc-04（0.576）/ooc-08（0.914）/ooc-09（0.647）都是"库里沾边但答不了" → `top_score` 高 → 判 strong → 走 `MEDICAL_PROMPT` → 规则 9 无条件要求标引用 ⇒ 给"我不知道"挂上 `[1]..[5]`——编号真实存在、**不算伪造出处**，但让"答不上来"看着有出处（**与最初那个 bug 同源**）。
-标定（实测）：真·可回答 **0.658~1.000**｜主题相关但不可回答 **0.576/0.914/0.647**｜真·库外 **0.010~0.137** ⇒ **单靠 `top_score` 无法区分**，"partial 按区间切"的方案**已排除**。候选信号：覆盖度 / **生成侧自省后处理**（回答出现「资料未提供/无法回答/仅提及」就剥引用编号，确定性可断言）。
+### ✅ `evidence=strong` ≠ 「可回答」（= 阶段二入口），已由生成侧自省兜住
+「库里有沾边的文档」≠「文档能回答这个问题」：ooc-04(0.576)/ooc-08(0.914)/ooc-09(0.647) 主题沾边但答不了，`top_score` 一样高 ⇒ 判 strong ⇒ 走 `MEDICAL_PROMPT` ⇒ 规则 9 无条件要求引用，给"我不知道"挂上真实存在的 `[1]..[5]`（编号真实、**不算伪造出处**，但与最初那个 bug 同源）。
+标定（实测）：真·可回答 **0.658~1.000**｜主题相关但不可回答 **0.576/0.914/0.647**｜真·库外 **0.010~0.137** ⇒ **`top_score` 分不开** ⇒「partial 按区间切」**已排除**，改走**生成侧自省**（T59，见「工程化基座」）。
 
 ### ✅ 规则门（`app/intent.py`）四条要点
 1. **假阳性影响最大（会拒答真问题）**：`_is_pure_ack()` 要求整串能被「确认词+语气助词」**吃干净**（前往后贪心，优先吃确认词）。只"从尾部剥语气词"不够（「行，知道了」剥掉「了」→「知道」不在词表→吃不完）。**整串字面相等必须排在线索检查之前**，否则「麻烦你了」含「麻」（发麻线索）会被永久短路。子串匹配+单字「好」入表曾让「好恶心」「好困」被判为会话语，**第二层 LLM 未被调用**。
@@ -56,6 +56,33 @@
 3. **同一缺陷会在第二层复现**：「好困」规则门放行后**仍被 LLM 判 chitchat**——两份改写 Prompt 里 chitchat 例子**全是问候**、ack 又把「好的」列进去，**判据空白**。修法：`REWRITE_PROMPT` 与 `CONTEXT_REWRITE_PROMPT` **同时**追加【症状主诉不是闲聊】。
 4. **改 Prompt ⇒ 缓存指纹整体作废**，基线随之失效，必须重跑 `eval_rag`；**修完一层必须再跑全量**。**判据刻意偏保守**（「我明白了」「改天聊，拜拜」落到第二层）——代价不对称，第一层假阳性会导致直接拒答且不可恢复。
 - **生成侧同样存在波动**：`ooc-08` 引用编号两次运行不一致而检索集完全相同 ⇒ 差异来自 `temperature=0.3`。**涉及生成文本的断言不宜用单次运行下结论。**
+
+## 工程化基座（2026-09-27 落地）
+- **Alembic 两条 revision，`alembic check` 是漂移体检的唯一权威**（别肉眼比对 information_schema）：
+  `e03c5380d2c8` baseline（**刻意保留真库历史形态**：`chat_messages.conversation_id` nullable + 无外键）
+  → `0f6e3b0d0396` repair（清孤儿 → 收紧 NOT NULL → 补 `fk_chat_messages_conversation_id`）。
+  ⚠️ **不能把 baseline 直接写成最终形态**：真库被 `stamp` 在 head 后缺失的外键永远补不上
+  （`upgrade` 认为无事可做），漂移永久留在 `check` 里。真库现状 = 202 条消息 / 孤儿 0 / stamp `0f6e3b0d0396`。
+- `alembic.ini` **必须纯 ASCII**（alembic 用本地码页 GBK 读它，中文注释直接 `UnicodeDecodeError`）；
+  连接串只在 `env.py` 从 `settings` 取、不进 ini；`%` 要写 `%%`。约束名靠
+  `Base.metadata` 的 `naming_convention`（`fk_%(table_name)s_%(column_0_name)s`；**别带
+  `%(referred_table_name)s`**，会生成超长名）。baseline 的 `downgrade` **手工删了**
+  `op.drop_index`（MySQL 1553：外键挂着的索引不能单删；`drop_table` 自带索引）。
+- **冻结改写集**：`REWRITE_CACHE_FROZEN=true` ⇒ 跳过指纹校验 + 只读不落盘，A/B 两边同一份输入。
+  快照 `data/frozen/rewrite_frozen.json` 走 `git add -f`（`backend/data/` 整目录被 ignore）。
+- **T59 走生成侧自省，`partial 三档`方案已作废**：`detect_unanswerable()` 扫回答**开头两句**
+  命中白名单 ⇒ `strip_all_citations()` 整篇剥编号（复用阶段四 `correction` 事件下发给前端覆盖）。
+  **`MEDICAL_PROMPT` 一个字没动**——出口在后处理，不去改规则 9/10。
+- **T61 历史摘要**：`format_history()` 超 6 轮折叠更早**用户**发言（4 条 × 40 字）。
+  ⚠️ `HISTORY_SUMMARY_ENABLED=false` **只作用于截断分支**——开关判断必须在
+  `len(history) <= max_turns` 提前返回**之后**，否则未截断路径输出也变了。
+- **CI**（`.github/workflows/ci.yml`）双 job：离线 5 项测试 + `ruff --select E9,F backend/app`。
+  离线 5 项 = `test_clarify_flow`/`test_focus_entity`/`test_groundedness`/`test_rewrite_cache`/
+  `test_history_summary`（**`test_lifespan` 不能进**，要真起服务）。`scripts/` **不进 lint**
+  （未使用导入是故意的可导入性检查）。CI 需先预装 CPU 版 torch，否则拉 CUDA 版数 GB。
+- **进度表**：`_build_progress.py`（62 卡 / 11 阶段）需 **openpyxl**，用
+  `~\.workbuddy\binaries\python\versions\3.13.12\python.exe` 跑——**RAG conda env 里没有**。
+  现况：已测试 57/62 = 91.9%｜交付口径(P0~P9) 52/55 = 94.5%｜未开发 4 = T49/T55/T57/T62。
 
 ## 基线
 ⚠️ 阶段三改改写 Prompt 时曾担心基线失效——**09-27 全量复跑实测：hit_rate 0.92 / mrr 0.9067 与基线逐位一致**（no-rewrite 口径不调改写，本就不受影响）⇒ **基线继续有效，无需重冻结**。coverage/similarity 的波动属生成侧噪声（`temperature=0.3`）、latency 含首载开销，**不宜当作回归**。

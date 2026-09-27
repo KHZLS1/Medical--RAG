@@ -44,6 +44,19 @@ class Settings(BaseSettings):
     rewrite_cache_path: str = "data/cache/rewrite_cache.json"
     # 缓存条目上限，超出按插入顺序淘汰最旧的（防文件无限膨胀）
     rewrite_cache_max_entries: int = 5000
+    # ---- 长对话历史摘要（T61）----
+    # 历史超出窗口（format_history 的 max_turns）时，把更早的用户发言压成一行要点，
+    # 避免"第 1 轮说的病情到第 12 轮已不在上下文里"。纯确定性、零 LLM 调用。
+    # 关掉 = 退回"只取最近 N 条"。注意它只在真的截断时才有影响，
+    # 因此对短对话的评估口径（含全部对抗集样本）没有任何改变。
+    history_summary_enabled: bool = True
+    # ---- 冻结改写集（A/B 可比的强约束）----
+    # 把某次运行冻结下来的改写结果当**只读输入**加载：跳过指纹校验、命中即逐字复用。
+    # 于是即使后来改了 Prompt（指纹变了），A/B 两边仍吃同一份改写结果。
+    # ⚠️ 要求**全命中**：miss 会真调 LLM 且不落盘 ⇒ 那几题本轮不可复现（看 stats.misses）。
+    rewrite_cache_frozen: bool = False
+    # 冻结集文件路径（独立于日常缓存，便于 `git add -f` 入库）
+    rewrite_frozen_path: str = "data/frozen/rewrite_frozen.json"
 
     # 数据库（在 .env 中配置 DATABASE_URL，勿在代码里写明文密码）
     database_url: str = ""
@@ -154,6 +167,11 @@ class Settings(BaseSettings):
     def rewrite_cache_path_resolved(self) -> Path:
         """返回改写缓存文件绝对路径（相对 backend 解析，目录不存在时由缓存自行创建）"""
         return Path(__file__).resolve().parent.parent / self.rewrite_cache_path
+
+    @property
+    def rewrite_frozen_path_resolved(self) -> Path:
+        """返回冻结改写集文件绝对路径（与日常缓存分开，便于单独入库）"""
+        return Path(__file__).resolve().parent.parent / self.rewrite_frozen_path
 
     @property
     def reranker_model_path(self) -> str:

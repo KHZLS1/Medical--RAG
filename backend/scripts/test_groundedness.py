@@ -7,6 +7,8 @@
   B. 图级 / 节点级（§3.2，用例 12~16）—— 验接线与 fail-open：
        generate → ground_check → END 生效、chat / insufficient 不接校验节点、
        L2 异常时文本一字不改（校验层不得成为故障点）。
+  C. 生成侧自省后处理（T59 改道，用例 17~21）—— 回答自认"资料答不了"时剥掉
+     全部引用编号（partial 三档已证伪后的替代方案）。含位置约束的反例。
 
 跑法（backend 目录）：
   python scripts/test_groundedness.py
@@ -29,7 +31,9 @@ from app.query_rewriter import RewriteResult
 from app.rag_chain import (
     GROUNDING_HEDGE,
     check_citations,
+    detect_unanswerable,
     parse_unsupported,
+    strip_all_citations,
 )
 
 _FAILED: list[str] = []
@@ -303,6 +307,78 @@ def case_16_trace_placement():
           "忠实性校验" not in ins_steps, str(ins_steps))
 
 
+# ============================================================================
+# C. 生成侧自省后处理（T59 改道：partial 三档的替代方案，用例 17~21）
+# ============================================================================
+def case_17_detect_unanswerable_hits():
+    print("== 17. detect_unanswerable：开头自陈 → 命中 ==")
+    for ans in (
+        "现有医学资料无法回答该问题，建议咨询执业医师。",
+        "您好。资料中未提供该药的具体剂量。",
+        "未找到相关资料，无法给出确切回答。",
+        "抱歉，资料未提及这个病的预后情况。",
+    ):
+        hit = detect_unanswerable(ans)
+        check(f"命中：{ans[:16]}…", bool(hit), repr(ans))
+
+
+def case_18_detect_unanswerable_position():
+    print("== 18. detect_unanswerable：中后段提及 → 不命中（位置约束）==")
+    # 主体答得上来，只是某一点资料没有 —— 剥掉整篇引用会丢掉真实出处
+    ans = (
+        "高血压患者可以少量食用党参，但需遵医嘱并监测血压[1]。"
+        "日常应低盐饮食、规律服药、控制体重[2]。"
+        "至于该药与党参的相互作用，资料未提供明确结论[3]。"
+    )
+    check("中段「资料未提供」不命中", detect_unanswerable(ans) == "",
+          repr(detect_unanswerable(ans)))
+    check("空串不命中", detect_unanswerable("") == "")
+    check("None 不命中", detect_unanswerable(None) == "")
+
+
+def case_19_strip_all_citations():
+    print("== 19. strip_all_citations：剥全部编号 + 标点收敛 ==")
+    cleaned, stripped = strip_all_citations("资料未提供该结论[1]，也无法给出确切答复[2]。")
+    check("剥出 [1,2]", stripped == [1, 2], str(stripped))
+    check("正文无编号", "[1]" not in cleaned and "[2]" not in cleaned, cleaned)
+    check("标点收敛无多余空格",
+          cleaned == "资料未提供该结论，也无法给出确切答复。", repr(cleaned))
+    same, none_stripped = strip_all_citations("普通句子，不带编号。")
+    check("无编号时文本不变", same == "普通句子，不带编号。", repr(same))
+    check("无编号时返回 []", none_stripped == [], str(none_stripped))
+
+
+def case_20_graph_strips_self_aware():
+    print("== 20. 图级：自陈答不上来 + 引用编号 → 整篇剥除 ==")
+    # 1 条资料 → [1] 是**合法**编号，L1 不动它；由自省层整篇剥掉
+    ans = "现有医学资料无法回答该问题[1]，建议您咨询执业医师。"
+    out = asyncio.run(run_full_graph(ans))
+    grounding = out.get("grounding") or {}
+    final = out.get("answer") or ""
+    check("终态不含 [1]", "[1]" not in final, final)
+    check("verdict=unanswerable_stripped",
+          grounding.get("verdict") == "unanswerable_stripped",
+          str(grounding.get("verdict")))
+    check("stripped_citations==[1]", grounding.get("stripped_citations") == [1],
+          str(grounding.get("stripped_citations")))
+    check("invalid 为空（[1] 本身合法）", grounding.get("invalid_citations") == [],
+          str(grounding.get("invalid_citations")))
+    check("corrected_answer 非空（据此推 correction）",
+          bool(grounding.get("corrected_answer")))
+    check("回答正文保留（只剥编号，不删内容）", "建议您咨询执业医师" in final, final)
+
+
+def case_21_self_aware_switch_off():
+    print("== 21. 开关关掉 → 自省后处理也不生效 ==")
+    ans = "现有医学资料无法回答该问题[1]。"
+    with patch.object(settings, "groundedness_citation_check", False):
+        out = g.node_ground_check({"answer": ans, "sources": sources(3), "context": ""})
+    check("answer 一字不改", out.get("answer") == ans, out.get("answer"))
+    check("stripped 为空",
+          (out.get("grounding") or {}).get("stripped_citations") == [],
+          str((out.get("grounding") or {}).get("stripped_citations")))
+
+
 def main():
     case_1_normal()
     case_2_out_of_range()
@@ -320,12 +396,17 @@ def main():
     case_14_l2_appends_hedge()
     case_15_l2_fail_open()
     case_16_trace_placement()
+    case_17_detect_unanswerable_hits()
+    case_18_detect_unanswerable_position()
+    case_19_strip_all_citations()
+    case_20_graph_strips_self_aware()
+    case_21_self_aware_switch_off()
 
     print()
     if _FAILED:
         print(f"FAILED {len(_FAILED)} 项: {_FAILED}")
         return 1
-    print("全绿：忠实性校验 L1/L2 + 接线与 fail-open 均通过。")
+    print("全绿：忠实性校验 L1/L2 + 生成侧自省 + 接线与 fail-open 均通过。")
     return 0
 
 

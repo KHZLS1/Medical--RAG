@@ -569,8 +569,11 @@ def evaluate_mode(mode, testset_path=None, bm25_weight=0.3,
     try:
         stats = rewrite_cache_stats()
         if stats.get("enabled"):
+            # 冻结集用「只读 + 绕过指纹」加载，misses 必须为 0，否则那几题本轮
+            # 是新改写的，指标与历史不可比 —— 把标记打出来，免得看报告时漏掉。
+            frozen_tag = "，冻结集只读" if stats.get("frozen") else ""
             print(f"  改写缓存: {stats['hits']} 命中 / {stats['misses']} 未命中"
-                  f" / 共 {stats['size']} 条 ({stats['path']})")
+                  f" / 共 {stats['size']} 条{frozen_tag} ({stats['path']})")
         else:
             print("  改写缓存: 已关闭（REWRITE_CACHE_ENABLED=false）→ 指标不可复现")
     except Exception as e:            # 缓存只是观测项，不能影响评估

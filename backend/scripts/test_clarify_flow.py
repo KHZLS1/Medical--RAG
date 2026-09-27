@@ -10,9 +10,11 @@
   6. 急症问题 → 不追问，直接 insufficient
   7. 澄清轮 trace 不与第一轮检索步骤重复（D4 验证点）
   8. 无 checkpointer → 不进 human_review（验证清单 #3「开关回退」的核心不变量）
+  9. 删除会话 → 该 thread 的 checkpoint 快照被清理（阶段二 §4 的记账项）
 
 跑法（backend 目录、rag 环境）：
   python scripts/test_clarify_flow.py
+退出码 0 = 全绿。
 """
 import sys
 import asyncio
@@ -24,9 +26,12 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import app.graph as g
+from app import checkpointer as cp
 from langchain_core.documents import Document
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
+
+_FAILED: list[str] = []
 
 
 # ---- 假实现：与真实依赖同签名 ----
@@ -130,6 +135,8 @@ async def run_graph(graph, graph_input, config):
 def check(name, cond, detail=""):
     mark = "PASS" if cond else "FAIL"
     print(f"  [{mark}] {name}" + (f"  ({detail})" if detail and not cond else ""))
+    if not cond:
+        _FAILED.append(name)
     return cond
 
 
@@ -144,7 +151,8 @@ async def main():
          patch("app.rag_chain.get_insufficient_chain", make_fake_chain), \
          patch("app.rag_chain.get_chat_chain", make_fake_chain):
         # interrupt() 必须有 checkpointer 才能暂停/恢复；用内存版，不碰生产 sqlite
-        graph = g.build_graph(checkpointer=InMemorySaver())
+        saver = InMemorySaver()
+        graph = g.build_graph(checkpointer=saver)
 
         print("== 1. 证据不足且可追问 → interrupt 暂停 ==")
         config = g.thread_config(999901)
@@ -251,8 +259,35 @@ async def main():
         check("落到 insufficient（有兜底回答，而不是抛错）",
               any(e[0] == "answer" for e in ev_nocp))
 
+        # 阶段二 §4 记账项：checkpointer 的 sqlite 独立于 MySQL，删会话不会波及它，
+        # 不清理就无限堆积（每轮都写 docs/context 全文）。这里用上面的 InMemorySaver
+        # 验证清理动作本身：thread 999901 在第 1 步已因 interrupt 落了快照。
+        print("== 9. 删除会话 → checkpoint 快照被清理 ==")
+        config_del = g.thread_config(999901)
+        before = await saver.aget_tuple(config_del)
+        check("删除前该 thread 有快照（前置条件成立）", before is not None)
+
+        async def _fake_get_checkpointer():
+            return saver
+
+        with patch.object(cp, "get_checkpointer", _fake_get_checkpointer), \
+             patch.object(cp.settings, "graph_checkpointer_enabled", True):
+            cleaned = await cp.delete_thread(999901)
+        after = await saver.aget_tuple(config_del)
+        check("delete_thread 返回 True", cleaned is True)
+        check("删除后快照消失", after is None, str(after))
+
+        # 开关关掉时不该去建库、也不该调用 saver
+        with patch.object(cp.settings, "graph_checkpointer_enabled", False):
+            skipped = await cp.delete_thread(999902)
+        check("checkpointer 关闭时不执行清理（返回 False）", skipped is False, str(skipped))
+
     print("\n离线管线自测完成。")
+    if _FAILED:
+        print(f"FAILED {len(_FAILED)} 项: {_FAILED}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
