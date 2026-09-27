@@ -1,0 +1,2233 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>医疗智能问答助手 · 双栏循证工作台（原型）</title>
+<style>
+/* ============================================================
+   1. 设计令牌
+   第一层 primitives：只放颜色本身，不带语义。
+   中性灰全部带一点品牌蓝的色相（hue 255，chroma 0.002–0.022），
+   让整块界面被同一个色温绑住，而不是一片死灰。
+   第二层 semantic：下面 :root 里的 --bg / --surface / --text-1 等，
+   切主题时只改这一层。
+   ============================================================ */
+:root {
+  --n-0:   oklch(99.2% 0.002 255);
+  --n-25:  oklch(97.6% 0.004 255);
+  --n-50:  oklch(95.8% 0.006 255);
+  --n-100: oklch(93.2% 0.008 255);
+  --n-150: oklch(90.0% 0.009 255);
+  --n-200: oklch(86.5% 0.010 255);
+  --n-300: oklch(79.0% 0.012 255);
+  --n-400: oklch(67.0% 0.014 255);
+  --n-500: oklch(57.0% 0.015 255);
+  --n-600: oklch(47.0% 0.017 255);
+  --n-700: oklch(37.0% 0.019 255);
+  --n-800: oklch(28.0% 0.021 255);
+  --n-900: oklch(21.0% 0.022 255);
+  --n-950: oklch(16.0% 0.022 255);
+
+  /* 交互主色：临床蓝。比 #2563eb 降了彩度、压深了一档，
+     目标是"可信"而不是"活泼"。 */
+  --blue-50:  oklch(96.5% 0.018 255);
+  --blue-100: oklch(92.5% 0.038 255);
+  --blue-200: oklch(85.5% 0.070 255);
+  --blue-500: oklch(55.0% 0.155 258);
+  --blue-600: oklch(48.5% 0.150 260);
+  --blue-700: oklch(41.0% 0.125 262);
+  --blue-900: oklch(29.0% 0.080 264);
+
+  /* 证据色：青绿。本产品真正的识别色 —— 它只属于"引用/证据"这一件事，
+     不参与任何普通装饰，所以看到青绿就等于看到出处。 */
+  --teal-50:  oklch(96.5% 0.022 185);
+  --teal-100: oklch(93.0% 0.042 185);
+  --teal-200: oklch(88.0% 0.062 185);
+  --teal-500: oklch(60.0% 0.105 185);
+  --teal-600: oklch(52.0% 0.100 187);
+  --teal-700: oklch(44.0% 0.085 189);
+
+  --amber-100: oklch(94.5% 0.055 85);
+  --amber-500: oklch(72.0% 0.150 78);
+  --amber-700: oklch(52.0% 0.120 70);
+  --red-100:   oklch(94.0% 0.045 27);
+  --red-500:   oklch(58.0% 0.190 27);
+  --green-100: oklch(94.0% 0.045 155);
+  --green-600: oklch(55.0% 0.130 155);
+
+  /* 间距：一套刻度，命名按用途大小而不是像素数 */
+  --space-3xs: 4px;
+  --space-2xs: 8px;
+  --space-xs:  12px;
+  --space-sm:  16px;
+  --space-md:  24px;
+  --space-lg:  32px;
+  --space-xl:  48px;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius:    10px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-caption: 12px;  --lh-caption: 18px;
+  --fs-meta:    13px;  --lh-meta:    20px;
+  --fs-body:    14.5px;--lh-body:    24px;
+  --fs-lead:    17px;  --lh-lead:    27px;
+  --fs-h2:      22px;  --lh-h2:      30px;
+
+  --z-sticky: 10;
+  --z-backdrop: 40;
+  --z-sheet: 50;
+  --z-toast: 70;
+
+  --ease: cubic-bezier(.32, .72, .34, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+
+  --rail-w: 64px;
+  --rail-w-open: 268px;
+  --evidence-w: 372px;
+}
+
+/* ---- 语义层：浅色 ---- */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg:            var(--n-50);
+  --surface:       var(--n-0);
+  --surface-2:     var(--n-25);
+  --surface-3:     var(--n-100);
+  --surface-sunken:var(--n-50);
+  --rail-bg:       var(--n-950);
+  --rail-fg:       oklch(88% 0.008 255);
+  --rail-fg-dim:   oklch(64% 0.014 255);
+  --rail-hover:    oklch(24% 0.024 255);
+  --rail-active:   oklch(28% 0.030 255);
+
+  --text-1: var(--n-900);
+  --text-2: var(--n-600);
+  --text-3: oklch(51% 0.016 255);
+
+  --border-1: var(--n-150);
+  --border-2: var(--n-200);
+  --border-strong: var(--n-300);
+
+  --accent:      var(--blue-600);
+  --accent-hover:var(--blue-700);
+  --accent-soft: var(--blue-50);
+  --accent-ring: var(--blue-200);
+  --on-accent:   oklch(99% 0.002 255);
+
+  --proof:       var(--teal-600);
+  --proof-strong:var(--teal-700);
+  --proof-soft:  var(--teal-50);
+  --proof-line:  var(--teal-200);
+  --on-proof:    oklch(99% 0.002 255);
+
+  --warn-soft: var(--amber-100);
+  --warn-fg:   var(--amber-700);
+  --warn-line: var(--amber-500);
+  --danger-soft: var(--red-100);
+  --danger-fg:   var(--red-500);
+  --ok-soft:   var(--green-100);
+  --ok-fg:     var(--green-600);
+
+  --shadow-sm: 0 1px 2px oklch(21% 0.022 255 / .06);
+  --shadow-md: 0 6px 20px oklch(21% 0.022 255 / .10);
+  --shadow-lg: 0 20px 48px oklch(21% 0.022 255 / .16);
+}
+
+/* ---- 语义层：深色。不是把浅色反过来 —— 深度改由"更亮的表面"表达，
+   阴影退场；主色与证据色都降一点彩度，避免在暗底上发光。 ---- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:            oklch(14.5% 0.012 255);
+  --surface:       oklch(18.0% 0.013 255);
+  --surface-2:     oklch(20.5% 0.014 255);
+  --surface-3:     oklch(23.5% 0.015 255);
+  --surface-sunken:oklch(16.0% 0.012 255);
+  --rail-bg:       oklch(12.0% 0.014 255);
+  --rail-fg:       oklch(84% 0.010 255);
+  --rail-fg-dim:   oklch(56% 0.014 255);
+  --rail-hover:    oklch(21% 0.020 255);
+  --rail-active:   oklch(25% 0.026 255);
+
+  --text-1: oklch(93.0% 0.008 255);
+  --text-2: oklch(76.0% 0.012 255);
+  --text-3: oklch(65.0% 0.014 255);
+
+  --border-1: oklch(26.0% 0.014 255);
+  --border-2: oklch(31.0% 0.015 255);
+  --border-strong: oklch(38.0% 0.016 255);
+
+  --accent:      oklch(66.0% 0.130 258);
+  --accent-hover:oklch(72.0% 0.125 258);
+  --accent-soft: oklch(26.0% 0.055 258);
+  --accent-ring: oklch(40.0% 0.090 258);
+  --on-accent:   oklch(16% 0.014 258);
+
+  --proof:       oklch(70.0% 0.090 185);
+  --proof-strong:oklch(78.0% 0.085 185);
+  --proof-soft:  oklch(25.0% 0.040 185);
+  --proof-line:  oklch(36.0% 0.055 185);
+  --on-proof:    oklch(16% 0.012 185);
+
+  --warn-soft: oklch(26.0% 0.050 80);
+  --warn-fg:   oklch(80.0% 0.120 80);
+  --warn-line: oklch(52.0% 0.100 78);
+  --danger-soft: oklch(26.0% 0.055 27);
+  --danger-fg:   oklch(72.0% 0.150 27);
+  --ok-soft:   oklch(26.0% 0.045 155);
+  --ok-fg:     oklch(74.0% 0.120 155);
+
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / .30);
+  --shadow-md: 0 8px 24px oklch(0% 0 0 / .40);
+  --shadow-lg: 0 24px 56px oklch(0% 0 0 / .55);
+}
+
+/* ============================================================
+   2. 基础
+   ============================================================ */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+input, textarea { font: inherit; color: inherit; }
+ol, ul { margin: 0; padding: 0; list-style: none; }
+h1, h2, h3, p { margin: 0; }
+svg { display: block; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.icon { width: 20px; height: 20px; stroke: currentColor; fill: none;
+        stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.icon-sm { width: 16px; height: 16px; stroke: currentColor; fill: none;
+           stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.icon-lg { width: 24px; height: 24px; stroke: currentColor; fill: none;
+           stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ============================================================
+   3. 外壳：图标栏 | 工作区 | 证据栏
+   ============================================================ */
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--evidence-w);
+  height: 100vh;
+  overflow: hidden;
+  transition: grid-template-columns var(--dur) var(--ease);
+}
+.app[data-nav="expanded"] { --rail-w: var(--rail-w-open); }
+.app[data-evidence="closed"] { --evidence-w: 0px; }
+
+/* ============================================================
+   4. 图标栏
+   64px 的深色竖条：不抢戏，但给整个界面一个稳定的左边界。
+   展开时变成会话列表（原侧边栏的职责收进来）。
+   ============================================================ */
+.rail {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-xs) var(--space-2xs) var(--space-sm);
+  background: var(--rail-bg);
+  color: var(--rail-fg);
+  overflow: hidden;
+}
+.rail-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  height: 40px;
+  padding: 0 var(--space-2xs);
+  margin-bottom: var(--space-2xs);
+  color: var(--rail-fg);
+  flex: none;
+}
+.rail-mark {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--proof);
+  color: var(--on-proof);
+}
+.rail-brand-text { min-width: 0; display: none; }
+.rail-brand-text strong {
+  display: block;
+  font-size: var(--fs-meta); line-height: var(--lh-meta); font-weight: 600;
+  white-space: nowrap;
+}
+.rail-brand-text span {
+  display: block;
+  font-size: var(--fs-caption); line-height: var(--lh-caption);
+  color: var(--rail-fg-dim); white-space: nowrap;
+}
+.app[data-nav="expanded"] .rail-brand-text { display: block; }
+
+.rail-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  width: 100%;
+  height: 40px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+  color: var(--rail-fg-dim);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.rail-btn:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.rail-btn[aria-current="true"],
+.rail-btn.is-on { background: var(--rail-active); color: var(--rail-fg); }
+.rail-btn .rail-label {
+  display: none;
+  min-width: 0;
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app[data-nav="expanded"] .rail-btn .rail-label { display: block; }
+.rail-btn .icon { flex: none; }
+
+.rail-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.rail-primary:hover { background: var(--accent-hover); color: var(--on-accent); }
+
+.rail-spacer { flex: 1; }
+
+/* 展开后的会话列表 */
+.rail-list {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2xs) 0;
+  margin: 0 calc(var(--space-2xs) * -1);
+}
+.app[data-nav="expanded"] .rail-list { display: flex; }
+.rail-list-label {
+  padding: var(--space-2xs) var(--space-xs) var(--space-3xs);
+  color: var(--rail-fg-dim);
+  font-size: var(--fs-caption);
+  letter-spacing: .04em;
+}
+.conv {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  color: var(--rail-fg-dim);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.conv:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.conv[aria-current="true"] { background: var(--rail-active); color: var(--rail-fg); }
+.conv-body { min-width: 0; flex: 1; }
+.conv-title {
+  font-size: var(--fs-meta);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conv-time {
+  font-size: var(--fs-caption);
+  color: var(--rail-fg-dim);
+  opacity: .75;
+}
+.conv-del {
+  flex: none;
+  display: grid; place-items: center;
+  width: 22px; height: 22px;
+  border-radius: var(--radius-xs);
+  color: var(--rail-fg-dim);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.conv:hover .conv-del, .conv:focus-within .conv-del { opacity: 1; }
+.conv-del:hover { color: var(--rail-fg); background: oklch(40% 0.10 27 / .5); }
+
+/* ============================================================
+   5. 工作区
+   ============================================================ */
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border-1);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: none;
+  min-height: 56px;
+  padding: var(--space-2xs) var(--space-sm) var(--space-2xs) var(--space-md);
+  border-bottom: 1px solid var(--border-1);
+  background: var(--surface);
+}
+.topbar-title { min-width: 0; flex: 1; }
+.topbar-title h1 {
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.topbar-sub {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  font-size: var(--fs-caption); line-height: var(--lh-caption);
+  color: var(--text-3);
+}
+.dot { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ok-fg); flex: none; }
+.dot.is-off { background: var(--danger-fg); }
+
+.topbar-actions { display: flex; align-items: center; gap: var(--space-2xs); flex: none; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  height: 32px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+.btn:hover { background: var(--surface-3); color: var(--text-1); border-color: var(--border-strong); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.btn-icon { width: 32px; padding: 0; justify-content: center; }
+.btn-accent {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
+.btn.is-on { border-color: var(--accent-ring); color: var(--accent); background: var(--accent-soft); }
+
+/* 免责声明：压成一条细带，不占整块版面，但一直看得见 */
+.disclaimer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  flex: none;
+  padding: var(--space-3xs) var(--space-md) var(--space-3xs) var(--space-md);
+  background: var(--warn-soft);
+  border-bottom: 1px solid var(--border-1);
+  color: var(--warn-fg);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+}
+.disclaimer .icon-sm { flex: none; }
+.disclaimer b { font-weight: 600; }
+
+/* ---- 消息流 ---- */
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  padding: var(--space-lg) var(--space-md) var(--space-md);
+}
+.thread-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-lg); }
+
+.msg { display: flex; flex-direction: column; gap: var(--space-2xs); min-width: 0; }
+.msg-role {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  font-size: var(--fs-caption); line-height: var(--lh-caption);
+  color: var(--text-3);
+}
+.msg-role .who { display: inline-flex; align-items: center; gap: var(--space-3xs); font-weight: 600; color: var(--text-2); }
+.msg.user .msg-body {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius) var(--radius) var(--radius) var(--radius-xs);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+  color: var(--text-1);
+}
+.msg.assistant .msg-body {
+  position: relative;
+  padding-left: var(--space-sm);
+  border-left: 2px solid transparent;
+  transition: border-color var(--dur) var(--ease);
+}
+.msg.assistant.is-active .msg-body { border-left-color: var(--proof-line); }
+
+/* 报告式正文：结论先行，小节带色标，条目悬挂缩进 */
+.answer { display: flex; flex-direction: column; gap: var(--space-xs); }
+.answer-lead {
+  font-size: var(--fs-lead);
+  line-height: var(--lh-lead);
+  font-weight: 500;
+  color: var(--text-1);
+}
+.answer-section { display: flex; flex-direction: column; gap: var(--space-2xs); }
+.answer-section-title {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  font-size: var(--fs-meta); font-weight: 600; color: var(--text-2);
+}
+.answer-section-title::before {
+  content: ""; flex: none;
+  width: 12px; height: 2px; border-radius: var(--radius-full);
+  background: var(--proof);
+}
+.answer-list { display: flex; flex-direction: column; gap: var(--space-3xs); }
+.answer-list li {
+  position: relative;
+  padding-left: var(--space-sm);
+  color: var(--text-1);
+}
+.answer-list li::before {
+  content: ""; position: absolute;
+  left: 4px; top: .68em;
+  width: 5px; height: 5px; border-radius: var(--radius-full);
+  background: var(--proof-line);
+}
+.answer-note {
+  display: flex; gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-1);
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+}
+.answer-note .icon-sm { flex: none; margin-top: 2px; }
+
+/* 正文角标：与证据栏编号徽章同一套视觉，一眼能连起来 */
+.cite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px; height: 18px;
+  padding: 0 4px;
+  margin: 0 2px;
+  vertical-align: 1px;
+  border-radius: var(--radius-full);
+  background: var(--proof-soft);
+  border: 1px solid var(--proof-line);
+  color: var(--proof-strong);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+              transform var(--dur-fast) var(--ease);
+}
+.cite:hover { background: var(--proof); color: var(--on-proof); transform: translateY(-1px); }
+.cite.is-flash {
+  background: var(--proof); color: var(--on-proof);
+  animation: citePulse 900ms var(--ease) 2;
+}
+@keyframes citePulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--proof-line); }
+  50%      { box-shadow: 0 0 0 4px var(--proof-soft); }
+}
+
+.cursor {
+  display: inline-block;
+  width: 8px; height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--proof);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 消息尾部操作条：复制 / 证据栏 / 检索元信息入口 */
+.msg-tools {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3xs);
+  padding-left: var(--space-sm);
+}
+.chip {
+  display: inline-flex; align-items: center; gap: var(--space-3xs);
+  height: 26px;
+  padding: 0 var(--space-2xs);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+.chip:hover { background: var(--surface-2); color: var(--text-1); border-color: var(--border-1); }
+.chip.is-on { background: var(--proof-soft); border-color: var(--proof-line); color: var(--proof-strong); }
+.chip-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chip-sep { width: 1px; height: 14px; background: var(--border-2); margin: 0 var(--space-3xs); }
+
+/* 追问气泡 */
+.clarify-badge {
+  display: inline-flex; align-items: center; gap: var(--space-3xs);
+  height: 20px; padding: 0 var(--space-2xs);
+  border-radius: var(--radius-full);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn-fg);
+  font-size: 11px; font-weight: 600;
+}
+.msg.assistant.is-clarify .msg-body {
+  padding: var(--space-sm);
+  border: 1px dashed var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.msg.assistant.is-clarify.is-active .msg-body { border-left: 1px dashed var(--warn-line); }
+
+/* 反馈 */
+.fb-bar { display: flex; align-items: center; gap: var(--space-2xs); padding-left: var(--space-sm); }
+.fb-form {
+  display: flex; flex-direction: column; gap: var(--space-2xs);
+  margin: var(--space-2xs) 0 0 var(--space-sm);
+  padding: var(--space-xs);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.fb-form label { font-size: var(--fs-caption); color: var(--text-3); }
+.fb-form textarea {
+  width: 100%;
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  resize: vertical;
+}
+.fb-form textarea::placeholder { color: var(--text-3); }
+.fb-form-actions { display: flex; justify-content: flex-end; gap: var(--space-2xs); }
+.fb-done {
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  margin-left: var(--space-sm);
+  padding: var(--space-3xs) var(--space-2xs);
+  border-radius: var(--radius-sm);
+  background: var(--ok-soft);
+  color: var(--ok-fg);
+  font-size: var(--fs-caption);
+}
+.fb-done button { text-decoration: underline; color: inherit; font-size: inherit; }
+.fb-err {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  margin: 0 auto var(--space-sm);
+  max-width: 760px;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger-fg);
+  font-size: var(--fs-caption);
+}
+
+/* 空态 */
+.empty {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: var(--space-xs);
+  padding: var(--space-xl) 0 var(--space-lg);
+}
+.empty-mark {
+  display: grid; place-items: center;
+  width: 44px; height: 44px;
+  border-radius: var(--radius);
+  background: var(--proof-soft);
+  border: 1px solid var(--proof-line);
+  color: var(--proof-strong);
+}
+.empty h2 { font-size: var(--fs-h2); line-height: var(--lh-h2); font-weight: 600; letter-spacing: -.01em; }
+.empty p { color: var(--text-2); max-width: 46ch; }
+.suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2xs); margin-top: var(--space-2xs); }
+.suggestion {
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-meta);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+.suggestion:hover { background: var(--proof-soft); border-color: var(--proof-line); color: var(--proof-strong); }
+
+/* ---- 输入区 ---- */
+.composer {
+  flex: none;
+  padding: var(--space-xs) var(--space-md) var(--space-sm);
+  background: var(--surface);
+  border-top: 1px solid var(--border-1);
+}
+.composer-inner {
+  display: flex; align-items: flex-end; gap: var(--space-2xs);
+  max-width: 760px; margin: 0 auto;
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.composer-inner:focus-within {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.composer textarea {
+  flex: 1;
+  min-height: 36px; max-height: 160px;
+  padding: var(--space-2xs) 0;
+  border: none; background: none; resize: none; outline: none;
+  font-size: var(--fs-body); line-height: var(--lh-body);
+}
+.composer textarea::placeholder { color: var(--text-3); }
+.composer-hint {
+  max-width: 760px; margin: var(--space-2xs) auto 0;
+  color: var(--text-3); font-size: var(--fs-caption);
+}
+
+/* ============================================================
+   6. 证据栏
+   这块是本次改版的全部理由：检索词、检索过程、来源卡片
+   不再被折叠在回答下方，而是常驻、与正文角标双向联动。
+   ============================================================ */
+.evidence {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.app[data-evidence="closed"] .evidence { display: none; }
+
+.evidence-head {
+  flex: none;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border-1);
+  background: var(--surface-2);
+}
+.evidence-head-row {
+  display: flex; align-items: center; gap: var(--space-2xs);
+}
+.evidence-head h2 {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  flex: 1; min-width: 0;
+  font-size: var(--fs-meta); font-weight: 600;
+}
+.evidence-head h2 .icon-sm { color: var(--proof); flex: none; }
+.evidence-scope {
+  margin-top: var(--space-3xs);
+  color: var(--text-3); font-size: var(--fs-caption);
+}
+.count-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 20px; padding: 0 var(--space-2xs);
+  border-radius: var(--radius-full);
+  background: var(--proof-soft);
+  border: 1px solid var(--proof-line);
+  color: var(--proof-strong);
+  font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.evidence-scroll {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-sm);
+  display: flex; flex-direction: column; gap: var(--space-sm);
+}
+
+.block {
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.block-head {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  width: 100%;
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+.block-head .icon-sm { color: var(--text-3); flex: none; }
+.block-head .chev { margin-left: auto; color: var(--text-3); transition: transform var(--dur) var(--ease); }
+.block-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.block-body { padding: 0 var(--space-xs) var(--space-xs); }
+.block-head[aria-expanded="false"] + .block-body { display: none; }
+
+.kv { display: flex; flex-direction: column; gap: var(--space-2xs); }
+.kv-row { display: flex; gap: var(--space-2xs); align-items: baseline; }
+.kv-key { flex: none; width: 68px; color: var(--text-3); font-size: var(--fs-caption); }
+.kv-val { min-width: 0; color: var(--text-1); font-size: var(--fs-meta); line-height: var(--lh-meta); }
+.rewrite-text {
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px dashed var(--border-2);
+  color: var(--text-1);
+  font-size: var(--fs-meta); line-height: var(--lh-meta);
+  word-break: break-word;
+}
+
+/* 检索过程时间轴 */
+.trace { display: flex; flex-direction: column; }
+.trace li {
+  position: relative;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 0 0 var(--space-xs) var(--space-sm);
+}
+.trace li:last-child { padding-bottom: 0; }
+.trace li::before {
+  content: ""; position: absolute;
+  left: 3px; top: 6px;
+  width: 7px; height: 7px; border-radius: var(--radius-full);
+  background: var(--surface); border: 2px solid var(--border-strong);
+}
+.trace li::after {
+  content: ""; position: absolute;
+  left: 6px; top: 15px; bottom: 2px;
+  width: 1px; background: var(--border-2);
+}
+.trace li:last-child::after { display: none; }
+.trace li.is-key::before { border-color: var(--proof); background: var(--proof); }
+.trace-step { color: var(--text-1); font-size: var(--fs-meta); font-weight: 600; }
+.trace-detail { color: var(--text-3); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+
+/* 证据卡 */
+.ev-list { display: flex; flex-direction: column; gap: var(--space-2xs); }
+.ev-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: var(--space-2xs);
+  padding: var(--space-xs);
+  border: 1px solid var(--border-1);
+  border-left: 3px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease);
+}
+.ev-card:hover { border-color: var(--border-strong); border-left-color: var(--border-strong); }
+.ev-card.is-active {
+  border-color: var(--proof-line);
+  border-left-color: var(--proof);
+  background: var(--proof-soft);
+  box-shadow: var(--shadow-sm);
+}
+.ev-top { display: flex; align-items: center; gap: var(--space-2xs); }
+.ev-index {
+  display: grid; place-items: center;
+  width: 22px; height: 22px; flex: none;
+  border-radius: var(--radius-full);
+  background: var(--proof);
+  color: var(--on-proof);
+  font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ev-title { flex: 1; min-width: 0; font-size: var(--fs-meta); font-weight: 600; line-height: var(--lh-meta); }
+.dept-tag {
+  flex: none;
+  height: 20px; padding: 0 var(--space-2xs);
+  display: inline-flex; align-items: center;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  border: 1px solid var(--border-1);
+  color: var(--text-2);
+  font-size: 11px;
+}
+.ev-snippet {
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  line-height: 1.62;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ev-card.is-open .ev-snippet { display: block; -webkit-line-clamp: unset; }
+.score {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  font-size: 11px; color: var(--text-3);
+}
+.score-bar {
+  flex: 1; height: 4px; border-radius: var(--radius-full);
+  background: var(--surface-3); overflow: hidden;
+}
+.score-fill { display: block; height: 100%; background: var(--proof); border-radius: var(--radius-full); }
+.score-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-2); }
+
+.ev-foot {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  padding-top: var(--space-2xs);
+  border-top: 1px solid var(--border-1);
+}
+.ev-path {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left;
+}
+.ev-full {
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-1);
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  line-height: 1.62;
+}
+.mini {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 var(--space-2xs);
+  border-radius: var(--radius-xs);
+  color: var(--text-3);
+  font-size: 11px;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.mini:hover { background: var(--surface-3); color: var(--text-1); }
+.mini.is-ok { color: var(--ok-fg); }
+
+.ev-empty {
+  display: flex; flex-direction: column; gap: var(--space-2xs);
+  padding: var(--space-md) var(--space-sm);
+  border: 1px dashed var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+}
+.ev-empty strong { color: var(--warn-fg); font-size: var(--fs-meta); }
+
+/* ============================================================
+   7. 弹层（文档管理 / 反馈看板）
+   ============================================================ */
+.backdrop {
+  position: fixed; inset: 0;
+  z-index: var(--z-backdrop);
+  background: oklch(16% 0.022 255 / .45);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+.backdrop.is-on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed;
+  z-index: var(--z-sheet);
+  top: 0; right: 0; bottom: 0;
+  width: min(560px, 100vw);
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border-1);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(100%);
+  transition: transform var(--dur) var(--ease);
+}
+.sheet.is-on { transform: translateX(0); }
+.sheet-head {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  flex: none;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border-1);
+}
+.sheet-head h2 { flex: 1; font-size: var(--fs-meta); font-weight: 600; }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-sm); }
+.sheet-section { display: flex; flex-direction: column; gap: var(--space-2xs); margin-bottom: var(--space-md); }
+.sheet-section > h3 {
+  font-size: var(--fs-caption); font-weight: 600; color: var(--text-3);
+  letter-spacing: .04em;
+}
+
+.stat-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2xs); }
+.stat {
+  padding: var(--space-xs);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.stat-num {
+  font-size: var(--fs-h2); line-height: 1.1; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label { margin-top: var(--space-3xs); color: var(--text-3); font-size: var(--fs-caption); }
+
+.row-card {
+  display: flex; flex-direction: column; gap: var(--space-2xs);
+  padding: var(--space-xs);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.row-card-top { display: flex; align-items: center; gap: var(--space-2xs); }
+.row-card-top strong { flex: 1; min-width: 0; font-size: var(--fs-meta); }
+.row-card p { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.62; }
+.row-card .quote { color: var(--text-3); }
+.row-card-actions { display: flex; gap: var(--space-2xs); }
+.badge {
+  flex: none; height: 20px; padding: 0 var(--space-2xs);
+  display: inline-flex; align-items: center;
+  border-radius: var(--radius-full);
+  font-size: 11px; font-weight: 600;
+}
+.badge.ok { background: var(--ok-soft); color: var(--ok-fg); }
+.badge.bad { background: var(--danger-soft); color: var(--danger-fg); }
+.badge.neutral { background: var(--surface-3); color: var(--text-2); }
+
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-2xs);
+  padding: var(--space-md);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+.file-row {
+  display: flex; align-items: center; gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.file-row .fname {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ============================================================
+   8. 轻提示
+   ============================================================ */
+.toast {
+  position: fixed;
+  z-index: var(--z-toast);
+  left: 50%; bottom: var(--space-md);
+  display: flex; align-items: center; gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-full);
+  background: var(--n-950);
+  color: var(--n-25);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-caption);
+  transform: translate(-50%, 12px);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.toast.is-on { opacity: 1; transform: translate(-50%, 0); }
+
+/* ============================================================
+   9. 响应式
+   证据栏在窄屏改为覆盖层；图标栏在更窄时也改为覆盖层。
+   ============================================================ */
+.only-narrow { display: none; }
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  .evidence {
+    position: fixed;
+    z-index: var(--z-sheet);
+    top: 0; right: 0; bottom: 0;
+    width: min(400px, 92vw);
+    border-left: 1px solid var(--border-1);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(100%);
+    transition: transform var(--dur) var(--ease);
+  }
+  .app[data-evidence="open"] .evidence { display: flex; transform: translateX(0); }
+  .app[data-evidence="closed"] .evidence { display: flex; }
+  .only-narrow { display: inline-flex; }
+}
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: fixed;
+    z-index: var(--z-sheet);
+    top: 0; bottom: 0; left: 0;
+    width: var(--rail-w-open);
+    transform: translateX(-100%);
+    transition: transform var(--dur) var(--ease);
+  }
+  .app[data-nav="expanded"] .rail { transform: translateX(0); }
+  .rail-brand-text, .rail-btn .rail-label { display: block; }
+  .rail-list { display: flex; }
+  .thread { padding: var(--space-md) var(--space-sm) var(--space-sm); }
+  .composer { padding: var(--space-2xs) var(--space-sm) var(--space-sm); }
+  .topbar { padding-left: var(--space-sm); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- 图标集：统一 20px 描边图标，替掉原来混用的 emoji -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-pulse" viewBox="0 0 24 24">
+      <path d="M3 12h3.6l2.1-5.4 3.2 10.8L14.4 12H21"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24">
+      <path d="M20.5 12.2a7.7 7.7 0 0 1-7.7 7.7H8.4L4 22.3l1.2-4.3a7.7 7.7 0 1 1 15.3-5.8Z"/>
+    </symbol>
+    <symbol id="i-file" viewBox="0 0 24 24">
+      <path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5L13.5 3Z"/>
+      <path d="M13.5 3v5.5H19"/>
+    </symbol>
+    <symbol id="i-feedback" viewBox="0 0 24 24">
+      <path d="M20.5 14.5a2 2 0 0 1-2 2H8.4L4 21V6.5a2 2 0 0 1 2-2h12.5a2 2 0 0 1 2 2Z"/>
+      <path d="M9 10h6M9 13.5h3.5"/>
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"/>
+      <path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24">
+      <path d="M20.8 13.3A8.7 8.7 0 1 1 10.7 3.2a6.8 6.8 0 0 0 10.1 10.1Z"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M20 12a8 8 0 0 0-13.7-5.6L4 8.6"/><path d="M4 5v4h4"/>
+      <path d="M4 12a8 8 0 0 0 13.7 5.6L20 15.4"/><path d="M20 19v-4h-4"/>
+    </symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/>
+    </symbol>
+    <symbol id="i-send" viewBox="0 0 24 24">
+      <path d="M21.5 2.5 10.8 13.2"/><path d="M21.5 2.5 14.6 21.5l-3.8-8.3-8.3-3.8 19-7Z"/>
+    </symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24">
+      <rect x="8.5" y="8.5" width="11" height="11" rx="2"/>
+      <path d="M15.5 5.5V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h.5"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5 9.5 17.5 19.5 6.5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24">
+      <path d="M7 21.5V10.2l3.9-8.2a2.4 2.4 0 0 1 2.3 2.4v4.3h4.6a2.2 2.2 0 0 1 2.2 2.6l-1.3 7.1a2.4 2.4 0 0 1-2.4 2H7Z"/>
+      <path d="M3 21.5h4V10.2H3Z"/>
+    </symbol>
+    <symbol id="i-down" viewBox="0 0 24 24">
+      <path d="M17 2.5v11.3l-3.9 8.2a2.4 2.4 0 0 1-2.3-2.4v-4.3H6.2a2.2 2.2 0 0 1-2.2-2.6l1.3-7.1a2.4 2.4 0 0 1 2.4-2H17Z"/>
+      <path d="M21 2.5h-4v11.3h4Z"/>
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+      <path d="M12 3.2 21.3 20H2.7L12 3.2Z"/><path d="M12 9.5v4.2M12 17.1h.01"/>
+    </symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9.5 12 15.5 18 9.5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6.8"/><path d="M20 20l-4.1-4.1"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4 7h16M9.5 7V4.8h5V7"/><path d="M6.4 7l.9 12.4h9.4L17.6 7"/>
+    </symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24">
+      <path d="M12 16.5V4.2"/><path d="M7.4 8.8 12 4.2l4.6 4.6"/><path d="M4 20h16"/>
+    </symbol>
+    <symbol id="i-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="8.5" r="3.8"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/>
+    </symbol>
+    <symbol id="i-stethoscope" viewBox="0 0 24 24">
+      <path d="M6 3v5.2a4.4 4.4 0 0 0 8.8 0V3"/>
+      <path d="M10.4 12.6v2.6a5 5 0 0 0 5 5h.6a4 4 0 0 0 4-4v-1.6"/>
+      <circle cx="20" cy="12.4" r="1.6"/>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24">
+      <path d="M10 13.5a3.6 3.6 0 0 0 5.1 0l3.3-3.3a3.6 3.6 0 0 0-5.1-5.1L11.6 6.8"/>
+      <path d="M14 10.5a3.6 3.6 0 0 0-5.1 0l-3.3 3.3a3.6 3.6 0 0 0 5.1 5.1l1.7-1.7"/>
+    </symbol>
+    <symbol id="i-route" viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="2.6"/><circle cx="18" cy="18" r="2.6"/>
+      <path d="M8.6 6h5.4a4 4 0 0 1 0 8H9.4a4 4 0 0 0 0 8h6"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.6"/><path d="M12 11v5.4M12 7.9h.01"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="app" id="app" data-nav="collapsed" data-evidence="open">
+
+  <!-- ===================== 图标栏 ===================== -->
+  <aside class="rail" aria-label="主导航">
+    <div class="rail-brand">
+      <span class="rail-mark"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg></span>
+      <span class="rail-brand-text">
+        <strong>医疗智能问答</strong>
+        <span>循证工作台</span>
+      </span>
+    </div>
+
+    <button class="rail-btn rail-primary" id="btn-new" type="button" title="新建对话">
+      <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+      <span class="rail-label">新建对话</span>
+    </button>
+
+    <button class="rail-btn is-on" id="btn-nav" type="button" aria-expanded="false" title="会话列表">
+      <svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>
+      <span class="rail-label">会话列表</span>
+    </button>
+
+    <div class="rail-list" id="rail-list" aria-label="历史会话"></div>
+
+    <div class="rail-spacer"></div>
+
+    <button class="rail-btn" id="btn-docs" type="button" title="文档管理">
+      <svg class="icon" aria-hidden="true"><use href="#i-file"/></svg>
+      <span class="rail-label">文档管理</span>
+    </button>
+    <button class="rail-btn" id="btn-feedback" type="button" title="反馈看板">
+      <svg class="icon" aria-hidden="true"><use href="#i-feedback"/></svg>
+      <span class="rail-label">反馈看板</span>
+    </button>
+    <button class="rail-btn" id="btn-theme" type="button" title="切换明暗主题">
+      <svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>
+      <span class="rail-label">切换主题</span>
+    </button>
+  </aside>
+
+  <!-- ===================== 工作区 ===================== -->
+  <main class="workspace">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 id="conv-title">高血压患者能吃党参吗？</h1>
+        <div class="topbar-sub">
+          <span class="dot" id="health-dot"></span>
+          <span id="health-text">Milvus 已连接 · collection: medical_qa</span>
+          <span class="chip-sep"></span>
+          <span id="health-time">更新于 14:32:08</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn only-narrow" id="btn-rail" type="button" aria-label="展开会话列表">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-chat"/></svg>
+        </button>
+        <button class="btn btn-icon" id="btn-health" type="button" aria-label="刷新检索服务状态" title="刷新检索服务状态">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        </button>
+        <button class="btn" id="btn-evidence" type="button" aria-pressed="true">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-panel"/></svg>
+          <span>证据栏</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="disclaimer">
+      <svg class="icon-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>本系统回答仅基于公开医学问答数据集与大模型生成，仅供参考，<b>不能替代执业医师诊断</b>。涉及急症请立即拨打 120。</span>
+    </div>
+
+    <div class="thread" id="thread" aria-live="polite"></div>
+
+    <form class="composer" id="composer">
+      <div class="composer-inner">
+        <label class="sr-only" for="input">请输入你的医疗问题</label>
+        <textarea id="input" rows="1" placeholder="请描述你的症状或医疗问题…"></textarea>
+        <button class="btn btn-accent" id="btn-send" type="submit">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-send"/></svg>
+          <span>发送</span>
+        </button>
+      </div>
+      <p class="composer-hint">证据不足时系统会先向你追问，不会硬答。</p>
+    </form>
+  </main>
+
+  <!-- ===================== 证据栏 ===================== -->
+  <aside class="evidence" id="evidence" aria-label="证据链">
+    <div class="evidence-head">
+      <div class="evidence-head-row">
+        <h2>
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-link"/></svg>
+          证据链
+        </h2>
+        <span class="count-pill" id="ev-count">0 条</span>
+        <button class="mini" id="btn-ev-close" type="button" aria-label="收起证据栏">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <div class="evidence-scope" id="ev-scope">点击正文角标可切换查看</div>
+    </div>
+    <div class="evidence-scroll" id="evidence-scroll"></div>
+  </aside>
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+
+<!-- 文档管理 -->
+<section class="sheet" id="sheet-docs" aria-hidden="true" aria-label="文档管理">
+  <header class="sheet-head">
+    <svg class="icon-sm" aria-hidden="true"><use href="#i-file"/></svg>
+    <h2>文档管理</h2>
+    <button class="btn btn-icon" data-close type="button" aria-label="关闭">
+      <svg class="icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <div class="sheet-body">
+    <div class="sheet-section">
+      <h3>入库文档 · 4 个科室</h3>
+      <div class="dropzone">
+        <svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>
+        <span>拖入 .jsonl / .csv / .txt 文件入库<br>相同内容哈希的文件会被自动拒绝</span>
+      </div>
+      <div class="file-row">
+        <span class="fname">心血管内科/hypertension_tcm_qa.jsonl</span>
+        <span class="badge ok">已入库</span>
+        <button class="mini" data-copy="心血管内科/hypertension_tcm_qa.jsonl" type="button">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制文件名
+        </button>
+      </div>
+      <div class="file-row">
+        <span class="fname">药学部/herb_drug_interaction_qa.jsonl</span>
+        <span class="badge ok">已入库</span>
+        <button class="mini" data-copy="药学部/herb_drug_interaction_qa.jsonl" type="button">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制文件名
+        </button>
+      </div>
+      <div class="file-row">
+        <span class="fname">中医科/codonopsis_pharmacology_qa.jsonl</span>
+        <span class="badge ok">已入库</span>
+        <button class="mini" data-copy="中医科/codonopsis_pharmacology_qa.jsonl" type="button">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制文件名
+        </button>
+      </div>
+      <div class="file-row">
+        <span class="fname">儿科/pediatric_fever_qa.jsonl</span>
+        <span class="badge neutral">向量化中</span>
+        <button class="mini" data-copy="儿科/pediatric_fever_qa.jsonl" type="button">
+          <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制文件名
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 反馈看板 -->
+<section class="sheet" id="sheet-feedback" aria-hidden="true" aria-label="反馈看板">
+  <header class="sheet-head">
+    <svg class="icon-sm" aria-hidden="true"><use href="#i-feedback"/></svg>
+    <h2>反馈看板</h2>
+    <button class="btn btn-icon" data-close type="button" aria-label="关闭">
+      <svg class="icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </header>
+  <div class="sheet-body">
+    <div class="sheet-section">
+      <h3>概览</h3>
+      <div class="stat-row">
+        <div class="stat"><div class="stat-num">128</div><div class="stat-label">累计反馈</div></div>
+        <div class="stat"><div class="stat-num">94</div><div class="stat-label">有用</div></div>
+        <div class="stat"><div class="stat-num">34</div><div class="stat-label">不准确</div></div>
+      </div>
+    </div>
+    <div class="sheet-section">
+      <h3>待核查 badcase</h3>
+      <div class="row-card">
+        <div class="row-card-top">
+          <strong>高血压患者能吃党参吗？</strong>
+          <span class="badge bad">不准确</span>
+        </div>
+        <p class="quote">纠错：回答里把"资料中提到的症状"说成了用户已有的症状。</p>
+        <p>备注：客户反馈第二段归属表述有误导。</p>
+        <div class="row-card-actions">
+          <button class="mini" data-copy="[#341] 高血压患者能吃党参吗？｜不准确｜纠错：回答里把资料中提到的症状说成了用户已有的症状。｜备注：客户反馈第二段归属表述有误导。" type="button">
+            <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制本条
+          </button>
+        </div>
+      </div>
+      <div class="row-card">
+        <div class="row-card-top">
+          <strong>糖尿病能吃西瓜吗</strong>
+          <span class="badge ok">有用</span>
+        </div>
+        <p>备注：引用编号能点开看原文，客户很认可这一点。</p>
+        <div class="row-card-actions">
+          <button class="mini" data-copy="[#338] 糖尿病能吃西瓜吗｜有用｜备注：引用编号能点开看原文，客户很认可这一点。" type="button">
+            <svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制本条
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ==========================================================
+     数据：结构刻意贴后端返回的字段
+     （sources[].index/title/department/source/score/snippet/full_text、
+       rewrite、trace[]、clarify、messageId）
+     ========================================================== */
+
+  var SRC = {
+    tcm: {
+      index: 1,
+      title: '高血压患者的中医用药注意事项',
+      department: '心血管内科',
+      source: 'data/by_department/心血管内科/hypertension_tcm_qa.jsonl',
+      score: 0.91,
+      snippet: '高血压患者在服用降压药期间，应谨慎使用具有补气、温阳作用的药材……建议在医师指导下小剂量短期使用，并加强血压监测。',
+      full_text: '高血压患者在服用降压药期间，应谨慎使用具有补气、温阳作用的药材。党参、黄芪等虽属平补之品，但仍可能通过强心、增加外周阻力等途径影响血压稳定性。临床建议：一、血压未达标或波动明显者暂不使用；二、血压长期稳定者可在医师指导下小剂量短期使用；三、用药期间应固定时间测量血压并记录，出现头晕、头痛、血压升高时立即停用并就诊。'
+    },
+    licorice: {
+      index: 2,
+      title: '含甘草中药制剂与血压升高的相关性',
+      department: '药学部',
+      source: 'data/by_department/药学部/herb_drug_interaction_qa.jsonl',
+      score: 0.86,
+      snippet: '甘草中的甘草酸可抑制 11β-羟基类固醇脱氢酶，引起水钠潴留与排钾增加，长期服用可导致血压升高……',
+      full_text: '甘草中的甘草酸可抑制 11β-羟基类固醇脱氢酶，使皮质醇灭活减少，引起水钠潴留与排钾增加。长期或较大剂量服用含甘草的制剂，可出现血压升高、低血钾、水肿等表现。参芪类中成药常同时含有甘草，与降压药同用时可能削弱降压效果，建议监测血压与血钾。'
+    },
+    codonopsis: {
+      index: 3,
+      title: '党参药理作用与临床应用',
+      department: '中医科',
+      source: 'data/by_department/中医科/codonopsis_pharmacology_qa.jsonl',
+      score: 0.79,
+      snippet: '党参具有补中益气、健脾益肺之效，现代药理研究显示其具有调节免疫、改善心功能等作用，对血压的影响存在个体差异……',
+      full_text: '党参具有补中益气、健脾益肺之效。现代药理研究显示其具有调节免疫、改善心功能、抗疲劳等作用，对血压的影响存在个体差异：部分研究提示可轻度升高血压，也有研究提示对血压无明显影响。临床应用需结合患者体质与合并用药情况综合判断。'
+    }
+  };
+
+  var MESSAGES = [
+    { role: 'user', content: '高血压患者能吃党参吗？' },
+    {
+      role: 'assistant',
+      messageId: 341,
+      sources: [SRC.tcm, SRC.licorice, SRC.codonopsis],
+      rewrite: '高血压 党参 能否服用 禁忌 相互作用',
+      trace: [
+        { step: '查询改写', detail: '「高血压患者能吃党参吗？」→ 检索词，耗时 0.4s' },
+        { step: 'BM25 检索', detail: 'k=20，命中 20 条，最高分 0.78' },
+        { step: '向量检索', detail: 'bge-large-zh-v1.5，k=20，最高相似度 0.83' },
+        { step: '混合融合', detail: 'bm25=0.3 / vector=0.7，去重后 31 条', key: true },
+        { step: '精排重排', detail: 'bge-reranker-v2-m3，top_k=5', key: true },
+        { step: '生成回答', detail: 'deepseek-chat，引用 3 条证据' }
+      ],
+      lead: '高血压患者不建议自行服用党参，尤其在服用降压药期间，需先咨询医师。[1]',
+      sections: [
+        {
+          title: '为什么有顾虑',
+          items: [
+            '党参具有补气与轻度强心作用，可能影响血压稳定性，与降压药同用存在药效相互干扰的可能。[1][3]',
+            '含党参的参芪类中成药常同时含有甘草，长期服用可能引起水钠潴留，从而削弱降压效果。[2]'
+          ]
+        },
+        {
+          title: '如果确实想用',
+          items: [
+            '应在血压长期稳定、并经心内科或中医师评估后，从小剂量开始短期使用。[1]',
+            '服用期间建议固定时间测量并记录血压；若出现头晕、头痛或血压明显升高，应立即停用并就诊。[2]'
+          ]
+        }
+      ],
+      note: '以上为资料中的一般性用药说明，是否适用于你，需要结合你的具体用药方案由医师判断。'
+    },
+    { role: 'user', content: '那我平时喝点党参泡水呢？' },
+    {
+      role: 'assistant',
+      messageId: 342,
+      sources: [
+        { index: 1, title: SRC.tcm.title, department: SRC.tcm.department, source: SRC.tcm.source, score: 0.88, snippet: SRC.tcm.snippet, full_text: SRC.tcm.full_text },
+        { index: 2, title: SRC.licorice.title, department: SRC.licorice.department, source: SRC.licorice.source, score: 0.74, snippet: SRC.licorice.snippet, full_text: SRC.licorice.full_text }
+      ],
+      rewrite: '党参 泡水 长期服用 高血压 影响（合并上一轮主题：高血压 党参）',
+      trace: [
+        { step: '查询改写', detail: '「那我平时喝点党参泡水呢？」为指代句，已合并上一轮主题' },
+        { step: 'BM25 检索', detail: 'k=20，命中 20 条，最高分 0.69' },
+        { step: '向量检索', detail: 'k=20，最高相似度 0.76' },
+        { step: '混合融合', detail: 'bm25=0.3 / vector=0.7，去重后 28 条', key: true },
+        { step: '精排重排', detail: 'bge-reranker-v2-m3，top_k=5', key: true },
+        { step: '生成回答', detail: 'deepseek-chat，引用 2 条证据' }
+      ],
+      lead: '偶尔少量党参泡水，摄入剂量低于煎服，风险相对更小，但并非没有影响。[1]',
+      sections: [
+        {
+          title: '需要注意',
+          items: [
+            '泡水属于长期、低剂量摄入，累积效应不易察觉，血压变化可能出现在一两周之后。[1]',
+            '若正在服用利尿类或钙通道阻滞类降压药，更建议先向医师确认能否同时使用。[2]'
+          ]
+        },
+        {
+          title: '建议做法',
+          items: [
+            '先连续记录一周晨起与睡前血压作为基线，再决定是否尝试。[1]',
+            '每次饮用后 1–2 小时测一次血压，连续观察三天，出现升高即停用。[2]'
+          ]
+        }
+      ],
+      note: '以上同样是资料层面的通用建议，具体请以医师意见为准。'
+    },
+    { role: 'user', content: '血压有点高怎么办' },
+    {
+      role: 'assistant',
+      messageId: 343,
+      clarify: true,
+      sources: [],
+      rewrite: '高血压 血压高 处理建议（泛问，未含部位与症状词，已回退拼接上一轮主题）',
+      trace: [
+        { step: '查询改写', detail: '「血压有点高怎么办」为泛问，未含具体症状与部位词' },
+        { step: 'BM25 检索', detail: 'k=20，最高分 0.31（低于阈值 0.45）' },
+        { step: '向量检索', detail: 'k=20，最高相似度 0.52（低于阈值 0.60）' },
+        { step: '证据判定', detail: '证据不足，触发追问策略，未进入生成', key: true }
+      ],
+      lead: '为了给你更准确的建议，我需要先补充两点信息：',
+      sections: [
+        {
+          title: '请补充',
+          items: [
+            '你最近一次测量的血压数值大概是多少（收缩压 / 舒张压）？',
+            '目前是否在服用降压药？如果在服用，药名和剂量是什么？'
+          ]
+        }
+      ],
+      note: '补充后我会重新检索资料，再给出针对性的说明。'
+    }
+  ];
+
+  var CONVERSATIONS = [
+    { id: 12, title: '高血压患者能吃党参吗？', time: '14:32', active: true },
+    { id: 11, title: '小孩发烧39度怎么办？', time: '11:08' },
+    { id: 10, title: '胃食管反流有哪些症状？', time: '昨天' },
+    { id: 9, title: '糖尿病患者饮食注意事项？', time: '昨天' },
+    { id: 8, title: '长期服用二甲双胍的副作用', time: '9月25日' },
+    { id: 7, title: '孕期能做CT检查吗', time: '9月24日' }
+  ];
+
+  var SUGGESTIONS = [
+    '高血压患者能吃党参吗？',
+    '小孩发烧39度怎么办？',
+    '胃食管反流有哪些症状？',
+    '糖尿病患者饮食注意事项？'
+  ];
+
+  var DEMO_REPLY = {
+    messageId: 344,
+    sources: [SRC.codonopsis, SRC.licorice],
+    rewrite: '孕期 CT 检查 安全性 辐射剂量',
+    trace: [
+      { step: '查询改写', detail: '生成检索词，耗时 0.3s' },
+      { step: 'BM25 检索', detail: 'k=20，命中 20 条' },
+      { step: '向量检索', detail: 'k=20，最高相似度 0.71' },
+      { step: '混合融合', detail: 'bm25=0.3 / vector=0.7，去重后 24 条', key: true },
+      { step: '精排重排', detail: 'bge-reranker-v2-m3，top_k=5', key: true },
+      { step: '生成回答', detail: 'deepseek-chat，引用 2 条证据' }
+    ],
+    lead: '这是原型演示回答：真实环境里这条内容来自检索到的资料与大模型生成。[1]',
+    sections: [
+      {
+        title: '演示要点',
+        items: [
+          '正文里的编号角标与右侧证据卡是同一套编号，点击任一侧都会联动高亮。[1][2]',
+          '「实际检索词」「检索过程」「来源出处」都常驻右侧，不再折叠在回答下方。[2]'
+        ]
+      }
+    ],
+    note: '原型数据为示意内容，不代表真实医学建议。'
+  };
+
+  /* ==========================================================
+     状态
+     ========================================================== */
+  var state = {
+    messages: MESSAGES.slice(),
+    activeMsg: null,
+    activeCite: null,
+    navExpanded: false,
+    evidenceOpen: true,
+    theme: 'light',
+    feedback: {},
+    downFormFor: null,
+    openEvidenceBlocks: { rewrite: true, trace: true, sources: true }
+  };
+
+  var el = {
+    app: document.getElementById('app'),
+    thread: document.getElementById('thread'),
+    evidenceScroll: document.getElementById('evidence-scroll'),
+    evCount: document.getElementById('ev-count'),
+    evScope: document.getElementById('ev-scope'),
+    railList: document.getElementById('rail-list'),
+    convTitle: document.getElementById('conv-title'),
+    healthDot: document.getElementById('health-dot'),
+    healthText: document.getElementById('health-text'),
+    healthTime: document.getElementById('health-time'),
+    backdrop: document.getElementById('backdrop'),
+    toast: document.getElementById('toast'),
+    input: document.getElementById('input'),
+    composer: document.getElementById('composer'),
+    sheetDocs: document.getElementById('sheet-docs'),
+    sheetFeedback: document.getElementById('sheet-feedback')
+  };
+
+  /* ==========================================================
+     工具
+     ========================================================== */
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var CITE_RE = /\[(\d+)\]/g;
+
+  /**
+   * 正文里的 [n] 只在 sources 中真实存在时才变成可点角标。
+   * 无资料的回答（澄清/闲聊）本就不该带编号；模型万一硬编一个 [7]，
+   * 宁可让它素着，也不能做成点不出东西的假链接。
+   */
+  function cite(text, msgIdx, known) {
+    var out = '';
+    var last = 0;
+    var m;
+    CITE_RE.lastIndex = 0;
+    while ((m = CITE_RE.exec(text)) !== null) {
+      var n = Number(m[1]);
+      if (!known.has(n)) continue;
+      out += esc(text.slice(last, m.index));
+      out += '<button class="cite" type="button" data-msg="' + msgIdx + '" data-cite="' + n +
+             '" title="定位到证据 [' + n + ']">[' + n + ']</button>';
+      last = m.index + m[0].length;
+    }
+    out += esc(text.slice(last));
+    return out;
+  }
+
+  function toast(msg) {
+    el.toast.innerHTML = '<svg class="icon-sm" aria-hidden="true"><use href="#i-check"/></svg>' + esc(msg);
+    el.toast.classList.add('is-on');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.toast.classList.remove('is-on'); }, 1600);
+  }
+
+  function copy(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { toast('已复制'); }, fallback);
+    } else {
+      fallback();
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast('已复制'); }
+      catch (e) { toast('复制失败，请手动选择'); }
+      document.body.removeChild(ta);
+    }
+  }
+
+  /* ==========================================================
+     渲染：会话列表
+     ========================================================== */
+  function renderRailList() {
+    el.railList.innerHTML =
+      '<div class="rail-list-label">历史会话</div>' +
+      CONVERSATIONS.map(function (c) {
+        return '<button class="conv" type="button" data-conv="' + c.id + '"' +
+               (c.active ? ' aria-current="true"' : '') + '>' +
+               '<span class="conv-body">' +
+                 '<span class="conv-title">' + esc(c.title) + '</span>' +
+                 '<span class="conv-time">' + esc(c.time) + '</span>' +
+               '</span>' +
+               '<span class="conv-del" role="button" tabindex="0" aria-label="删除会话" data-del="' + c.id + '">' +
+                 '<svg class="icon-sm" aria-hidden="true"><use href="#i-trash"/></svg>' +
+               '</span>' +
+             '</button>';
+      }).join('');
+  }
+
+  /* ==========================================================
+     渲染：消息流
+     ========================================================== */
+  function renderAnswer(m, i) {
+    var known = new Set((m.sources || []).map(function (s) { return s.index; }));
+    var html = '<div class="answer">';
+    if (m.lead) html += '<p class="answer-lead">' + cite(m.lead, i, known) + '</p>';
+    (m.sections || []).forEach(function (sec) {
+      html += '<div class="answer-section">' +
+                '<div class="answer-section-title">' + esc(sec.title) + '</div>' +
+                '<ul class="answer-list">' +
+                  sec.items.map(function (it) {
+                    return '<li>' + cite(it, i, known) + '</li>';
+                  }).join('') +
+                '</ul>' +
+              '</div>';
+    });
+    if (m.note) {
+      html += '<div class="answer-note">' +
+                '<svg class="icon-sm" aria-hidden="true"><use href="#i-info"/></svg>' +
+                '<span>' + esc(m.note) + '</span>' +
+              '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderMsg(m, i) {
+    var isActive = state.activeMsg === i;
+    var cls = 'msg ' + m.role + (isActive ? ' is-active' : '') + (m.clarify ? ' is-clarify' : '');
+    var html = '<article class="' + cls + '" data-idx="' + i + '">';
+
+    html += '<div class="msg-role">' +
+              '<span class="who">' +
+                '<svg class="icon-sm" aria-hidden="true"><use href="#' +
+                  (m.role === 'user' ? 'i-user' : 'i-stethoscope') + '"/></svg>' +
+                (m.role === 'user' ? '你' : '医疗助手') +
+              '</span>' +
+              (m.clarify
+                ? '<span class="clarify-badge"><svg class="icon-sm" aria-hidden="true"><use href="#i-search"/></svg>请补充信息</span>'
+                : '') +
+            '</div>';
+
+    html += '<div class="msg-body">';
+    if (m.role === 'user') {
+      html += esc(m.content);
+    } else if (m.streaming) {
+      html += '<div class="answer"><p class="answer-lead">' + esc(m.content || '') + '<span class="cursor"></span></p></div>';
+    } else {
+      html += renderAnswer(m, i);
+    }
+    html += '</div>';
+
+    if (m.role === 'assistant' && !m.streaming) {
+      var n = (m.sources || []).length;
+      html += '<div class="msg-tools">';
+      html += '<button class="chip" type="button" data-copy="' + esc(m.plainText || plainAnswer(m)) + '">' +
+                '<svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制回答</button>';
+      html += '<span class="chip-sep"></span>';
+      html += '<button class="chip' + (isActive ? ' is-on' : '') + '" type="button" data-focus="' + i + '">' +
+                '<svg class="icon-sm" aria-hidden="true"><use href="#i-link"/></svg>' +
+                (n > 0 ? '证据栏查看 <span class="chip-num">' + n + '</span>' : '证据栏查看') +
+              '</button>';
+      if (m.rewrite) {
+        html += '<button class="chip" type="button" data-block="rewrite" data-focus="' + i + '">' +
+                  '<svg class="icon-sm" aria-hidden="true"><use href="#i-search"/></svg>实际检索词</button>';
+      }
+      if (m.trace && m.trace.length) {
+        html += '<button class="chip" type="button" data-block="trace" data-focus="' + i + '">' +
+                  '<svg class="icon-sm" aria-hidden="true"><use href="#i-route"/></svg>检索过程</button>';
+      }
+      html += '</div>';
+    }
+
+    if (m.role === 'user') {
+      html += '<div class="msg-tools">' +
+                '<button class="chip" type="button" data-copy="' + esc(m.content) + '">' +
+                  '<svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制提问</button>' +
+              '</div>';
+    }
+
+    if (m.role === 'assistant' && m.messageId && !m.streaming) {
+      var fb = state.feedback[m.messageId];
+      if (fb) {
+        html += '<div class="fb-done">' +
+                  '<svg class="icon-sm" aria-hidden="true"><use href="#i-check"/></svg>' +
+                  '已收到反馈，感谢你的帮助' +
+                  '<button type="button" data-withdraw="' + m.messageId + '">撤回</button>' +
+                '</div>';
+      } else {
+        html += '<div class="fb-bar">' +
+                  '<button class="chip" type="button" data-up="' + m.messageId + '">' +
+                    '<svg class="icon-sm" aria-hidden="true"><use href="#i-up"/></svg>有用</button>' +
+                  '<button class="chip" type="button" data-down="' + m.messageId + '">' +
+                    '<svg class="icon-sm" aria-hidden="true"><use href="#i-down"/></svg>不准确</button>' +
+                '</div>';
+      }
+      if (state.downFormFor === m.messageId) {
+        html += '<div class="fb-form">' +
+                  '<label for="corr-' + m.messageId + '">如果能给出你认为更准确的回答，将帮助改进模型</label>' +
+                  '<textarea id="corr-' + m.messageId + '" rows="3" placeholder="（可选）更准确的回答"></textarea>' +
+                  '<label for="cmt-' + m.messageId + '">备注</label>' +
+                  '<textarea id="cmt-' + m.messageId + '" rows="2" placeholder="（可选）备注"></textarea>' +
+                  '<div class="fb-form-actions">' +
+                    '<button class="btn" type="button" data-cancel-down>取消</button>' +
+                    '<button class="btn btn-accent" type="button" data-submit-down="' + m.messageId + '">提交差评</button>' +
+                  '</div>' +
+                '</div>';
+      }
+    }
+
+    html += '</article>';
+    return html;
+  }
+
+  function renderThread() {
+    if (state.messages.length === 0) {
+      el.thread.innerHTML =
+        '<div class="thread-inner"><div class="empty">' +
+          '<span class="empty-mark"><svg class="icon-lg" aria-hidden="true"><use href="#i-pulse"/></svg></span>' +
+          '<h2>医疗智能问答助手</h2>' +
+          '<p>基于医疗问答数据集与大模型生成，每条回答都标注来源，可在右侧逐条核对原文。回答仅供参考，不替代医师诊断。</p>' +
+          '<div class="suggestions">' +
+            SUGGESTIONS.map(function (s) {
+              return '<button class="suggestion" type="button" data-ask="' + esc(s) + '">' + esc(s) + '</button>';
+            }).join('') +
+          '</div>' +
+        '</div></div>';
+      return;
+    }
+    el.thread.innerHTML = '<div class="thread-inner">' +
+      state.messages.map(renderMsg).join('') + '</div>';
+  }
+
+  /* ==========================================================
+     渲染：证据栏
+     ========================================================== */
+  function activeMessage() {
+    if (state.activeMsg === null) return null;
+    var m = state.messages[state.activeMsg];
+    return m && m.role === 'assistant' ? m : null;
+  }
+
+  function renderEvidence() {
+    var m = activeMessage();
+    var idx = state.activeMsg;
+
+    if (!m) {
+      el.evCount.textContent = '0 条';
+      el.evScope.textContent = '点击正文角标可切换查看';
+      el.evidenceScroll.innerHTML =
+        '<div class="ev-empty"><strong>尚未选择回答</strong>' +
+        '点击任一回答下方的「证据栏查看」，或直接点正文里的编号角标，这里会显示那一轮的检索词、检索链路与来源原文。</div>';
+      return;
+    }
+
+    var n = (m.sources || []).length;
+    el.evCount.textContent = n + ' 条';
+    el.evScope.textContent = '关联第 ' + (Math.floor(idx / 2) + 1) + ' 轮回答 · 点击角标可定位';
+
+    var html = '';
+
+    if (m.rewrite) {
+      var ro = state.openEvidenceBlocks.rewrite;
+      html += '<section class="block">' +
+        '<button class="block-head" type="button" data-toggle-block="rewrite" aria-expanded="' + ro + '">' +
+          '<svg class="icon-sm" aria-hidden="true"><use href="#i-search"/></svg>实际检索词' +
+          '<svg class="icon-sm chev" aria-hidden="true"><use href="#i-chev"/></svg>' +
+        '</button>' +
+        '<div class="block-body">' +
+          '<div class="rewrite-text">' + esc(m.rewrite) + '</div>' +
+          '<div style="margin-top:8px;display:flex;gap:4px">' +
+            '<button class="mini" type="button" data-copy="' + esc(m.rewrite) + '">' +
+              '<svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制检索词</button>' +
+          '</div>' +
+        '</div>' +
+      '</section>';
+    }
+
+    if (m.trace && m.trace.length) {
+      var to = state.openEvidenceBlocks.trace;
+      html += '<section class="block">' +
+        '<button class="block-head" type="button" data-toggle-block="trace" aria-expanded="' + to + '">' +
+          '<svg class="icon-sm" aria-hidden="true"><use href="#i-route"/></svg>检索过程' +
+          '<svg class="icon-sm chev" aria-hidden="true"><use href="#i-chev"/></svg>' +
+        '</button>' +
+        '<div class="block-body">' +
+          '<ol class="trace">' +
+            m.trace.map(function (t) {
+              return '<li' + (t.key ? ' class="is-key"' : '') + '>' +
+                       '<span class="trace-step">' + esc(t.step) + '</span>' +
+                       '<span class="trace-detail">' + esc(t.detail) + '</span>' +
+                     '</li>';
+            }).join('') +
+          '</ol>' +
+          '<div style="margin-top:8px">' +
+            '<button class="mini" type="button" data-copy="' + esc(traceText(m.trace)) + '">' +
+              '<svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制检索过程</button>' +
+          '</div>' +
+        '</div>' +
+      '</section>';
+    }
+
+    if (n === 0) {
+      html += '<div class="ev-empty">' +
+        '<strong>本轮未检索到可用证据</strong>' +
+        '系统判定证据不足，已中断生成并向你追问。补充信息后会重新检索，来源会出现在这里。</div>';
+    } else {
+      var so = state.openEvidenceBlocks.sources;
+      html += '<section class="block">' +
+        '<button class="block-head" type="button" data-toggle-block="sources" aria-expanded="' + so + '">' +
+          '<svg class="icon-sm" aria-hidden="true"><use href="#i-link"/></svg>引用来源 · ' + n + ' 条' +
+          '<svg class="icon-sm chev" aria-hidden="true"><use href="#i-chev"/></svg>' +
+        '</button>' +
+        '<div class="block-body"><div class="ev-list">' +
+          m.sources.map(function (s) {
+            var isHit = state.activeCite === s.index;
+            var pct = Math.round((s.score || 0) * 100);
+            return '<article class="ev-card' + (isHit ? ' is-active' : '') + '" id="ev-' + idx + '-' + s.index + '">' +
+              '<div class="ev-top">' +
+                '<span class="ev-index">' + s.index + '</span>' +
+                '<span class="ev-title">' + esc(s.title) + '</span>' +
+                '<span class="dept-tag">' + esc(s.department || '未知科室') + '</span>' +
+              '</div>' +
+              '<p class="ev-snippet">' + esc(s.snippet || '') + '</p>' +
+              '<div class="score">' +
+                '<span>匹配度</span>' +
+                '<span class="score-bar"><span class="score-fill" style="width:' + pct + '%"></span></span>' +
+                '<span class="score-num">' + (s.score ? s.score.toFixed(2) : '—') + '</span>' +
+              '</div>' +
+              (s.full_text
+                ? '<button class="mini" type="button" data-full="' + idx + '-' + s.index + '">' +
+                    '<svg class="icon-sm" aria-hidden="true"><use href="#i-file"/></svg>查看完整原文</button>' +
+                  '<div class="ev-full" id="full-' + idx + '-' + s.index + '" hidden>' + esc(s.full_text) + '</div>'
+                : '') +
+              '<div class="ev-foot">' +
+                '<span class="ev-path" title="' + esc(s.source) + '">' + esc(s.source) + '</span>' +
+                '<button class="mini" type="button" data-copy="' + esc(citation(s)) + '">' +
+                  '<svg class="icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>复制出处</button>' +
+              '</div>' +
+            '</article>';
+          }).join('') +
+        '</div></div>' +
+      '</section>';
+    }
+
+    el.evidenceScroll.innerHTML = html;
+
+    // 定位到被点中的证据卡
+    if (state.activeCite !== null) {
+      var card = document.getElementById('ev-' + idx + '-' + state.activeCite);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  function citation(s) {
+    return '[' + s.index + '] ' + s.title + '（' + (s.department || '未知科室') + '）\n来源：' + s.source;
+  }
+
+  function traceText(steps) {
+    return steps.map(function (t, i) { return (i + 1) + '. ' + t.step + ' — ' + t.detail; }).join('\n');
+  }
+
+  function plainAnswer(m) {
+    var parts = [];
+    if (m.lead) parts.push(m.lead);
+    (m.sections || []).forEach(function (s) {
+      parts.push(s.title);
+      s.items.forEach(function (it) { parts.push('· ' + it); });
+    });
+    if (m.note) parts.push(m.note);
+    return parts.join('\n');
+  }
+
+  function render() {
+    renderThread();
+    renderEvidence();
+    renderRailList();
+    el.app.dataset.nav = state.navExpanded ? 'expanded' : 'collapsed';
+    el.app.dataset.evidence = state.evidenceOpen ? 'open' : 'closed';
+    document.getElementById('btn-evidence').setAttribute('aria-pressed', String(state.evidenceOpen));
+    document.getElementById('btn-nav').setAttribute('aria-expanded', String(state.navExpanded));
+    document.getElementById('btn-nav').classList.toggle('is-on', state.navExpanded);
+  }
+
+  function focusMessage(i, citeN) {
+    state.activeMsg = i;
+    state.activeCite = citeN == null ? null : citeN;
+    render();
+    if (citeN != null) {
+      var t = document.querySelector('.cite[data-msg="' + i + '"][data-cite="' + citeN + '"]');
+      if (t) {
+        t.classList.add('is-flash');
+        setTimeout(function () { t.classList.remove('is-flash'); }, 1900);
+      }
+    }
+  }
+
+  /* ==========================================================
+     事件
+     ========================================================== */
+  el.thread.addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+
+    if (t.dataset.cite) {
+      focusMessage(Number(t.dataset.msg), Number(t.dataset.cite));
+      if (!state.evidenceOpen) { state.evidenceOpen = true; render(); }
+      return;
+    }
+    if (t.dataset.focus) {
+      var i = Number(t.dataset.focus);
+      if (t.dataset.block) {
+        state.openEvidenceBlocks[t.dataset.block] = true;
+        focusMessage(i, null);
+      } else {
+        focusMessage(i, null);
+      }
+      if (!state.evidenceOpen) { state.evidenceOpen = true; render(); }
+      return;
+    }
+    if (t.dataset.copy !== undefined) { copy(t.dataset.copy); return; }
+    if (t.dataset.ask) { send(t.dataset.ask); return; }
+    if (t.dataset.up) {
+      state.feedback[t.dataset.up] = 'up';
+      state.downFormFor = null;
+      render();
+      toast('已记录：有用');
+      return;
+    }
+    if (t.dataset.down) {
+      state.downFormFor = Number(t.dataset.down);
+      render();
+      var ta = document.getElementById('corr-' + state.downFormFor);
+      if (ta) ta.focus();
+      return;
+    }
+    if (t.hasAttribute('data-cancel-down')) { state.downFormFor = null; render(); return; }
+    if (t.dataset.submitDown) {
+      state.feedback[t.dataset.submitDown] = 'down';
+      state.downFormFor = null;
+      render();
+      toast('已提交差评，感谢标注');
+      return;
+    }
+    if (t.dataset.withdraw) {
+      delete state.feedback[t.dataset.withdraw];
+      render();
+      toast('已撤回反馈');
+      return;
+    }
+  });
+
+  el.evidenceScroll.addEventListener('click', function (e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+
+    if (t.dataset.toggleBlock) {
+      var k = t.dataset.toggleBlock;
+      state.openEvidenceBlocks[k] = !state.openEvidenceBlocks[k];
+      // 清掉角标定位：否则每次折叠都会被强制滚回那张证据卡
+      state.activeCite = null;
+      renderEvidence();
+      return;
+    }
+    if (t.dataset.full) {
+      var box = document.getElementById('full-' + t.dataset.full);
+      if (!box) return;
+      var open = box.hasAttribute('hidden');
+      if (open) box.removeAttribute('hidden'); else box.setAttribute('hidden', '');
+      t.classList.toggle('is-ok', open);
+      t.innerHTML = '<svg class="icon-sm" aria-hidden="true"><use href="#i-file"/></svg>' +
+                    (open ? '收起原文' : '查看完整原文');
+      return;
+    }
+    if (t.dataset.copy !== undefined) { copy(t.dataset.copy); return; }
+  });
+
+  // 点证据卡本体 → 反向高亮正文角标
+  el.evidenceScroll.addEventListener('click', function (e) {
+    var card = e.target.closest('.ev-card');
+    if (!card || e.target.closest('button')) return;
+    var parts = card.id.split('-');
+    focusMessage(Number(parts[1]), Number(parts[2]));
+  });
+
+  el.railList.addEventListener('click', function (e) {
+    var del = e.target.closest('[data-del]');
+    if (del) {
+      e.stopPropagation();
+      var id = Number(del.dataset.del);
+      var at = -1;
+      for (var i = 0; i < CONVERSATIONS.length; i++) if (CONVERSATIONS[i].id === id) at = i;
+      if (at >= 0) {
+        var removed = CONVERSATIONS.splice(at, 1)[0];
+        if (removed.active && CONVERSATIONS.length) CONVERSATIONS[0].active = true;
+        renderRailList();
+        toast('已删除会话「' + removed.title + '」');
+      }
+      return;
+    }
+    var btn = e.target.closest('[data-conv]');
+    if (!btn) return;
+    CONVERSATIONS.forEach(function (c) { c.active = c.id === Number(btn.dataset.conv); });
+    var cur = CONVERSATIONS.filter(function (c) { return c.active; })[0];
+    el.convTitle.textContent = cur ? cur.title : '新对话';
+    renderRailList();
+  });
+
+  document.getElementById('btn-new').addEventListener('click', function () {
+    CONVERSATIONS.forEach(function (c) { c.active = false; });
+    state.messages = [];
+    state.activeMsg = null;
+    state.activeCite = null;
+    el.convTitle.textContent = '新对话';
+    render();
+    el.input.focus();
+  });
+
+  document.getElementById('btn-nav').addEventListener('click', function () {
+    state.navExpanded = !state.navExpanded;
+    render();
+  });
+
+  document.getElementById('btn-rail').addEventListener('click', function () {
+    state.navExpanded = !state.navExpanded;
+    render();
+  });
+
+  document.getElementById('btn-evidence').addEventListener('click', function () {
+    state.evidenceOpen = !state.evidenceOpen;
+    render();
+  });
+  document.getElementById('btn-ev-close').addEventListener('click', function () {
+    state.evidenceOpen = false;
+    render();
+  });
+
+  document.getElementById('btn-theme').addEventListener('click', function () {
+    state.theme = state.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = state.theme;
+    document.getElementById('btn-theme').title =
+      state.theme === 'light' ? '切换到深色主题' : '切换到浅色主题';
+    toast(state.theme === 'light' ? '已切到浅色主题' : '已切到深色主题');
+  });
+
+  document.getElementById('btn-health').addEventListener('click', function () {
+    var b = this;
+    b.disabled = true;
+    el.healthText.textContent = '正在检查 Milvus…';
+    el.healthDot.classList.remove('is-off');
+    setTimeout(function () {
+      b.disabled = false;
+      el.healthText.textContent = 'Milvus 已连接 · collection: medical_qa';
+      var d = new Date();
+      var p = function (n) { return String(n).padStart(2, '0'); };
+      el.healthTime.textContent = '更新于 ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      toast('状态已刷新');
+    }, 620);
+  });
+
+  // 弹层
+  function openSheet(which) {
+    var s = which === 'docs' ? el.sheetDocs : el.sheetFeedback;
+    s.classList.add('is-on');
+    s.setAttribute('aria-hidden', 'false');
+    el.backdrop.classList.add('is-on');
+    s.querySelector('[data-close]').focus();
+  }
+  function closeSheets() {
+    [el.sheetDocs, el.sheetFeedback].forEach(function (s) {
+      s.classList.remove('is-on');
+      s.setAttribute('aria-hidden', 'true');
+    });
+    el.backdrop.classList.remove('is-on');
+  }
+  document.getElementById('btn-docs').addEventListener('click', function () { openSheet('docs'); });
+  document.getElementById('btn-feedback').addEventListener('click', function () { openSheet('feedback'); });
+  el.backdrop.addEventListener('click', closeSheets);
+  document.querySelectorAll('[data-close]').forEach(function (b) {
+    b.addEventListener('click', closeSheets);
+  });
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    if (b.closest('.sheet')) b.addEventListener('click', function () { copy(b.dataset.copy); });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { closeSheets(); state.downFormFor = null; render(); }
+  });
+
+  // 输入
+  el.input.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+  });
+  el.input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      el.composer.dispatchEvent(new Event('submit', { cancelable: true }));
+    }
+  });
+
+  el.composer.addEventListener('submit', function (e) {
+    e.preventDefault();
+    send(el.input.value);
+  });
+
+  function send(text) {
+    var q = String(text || '').trim();
+    if (!q) return;
+
+    el.input.value = '';
+    el.input.style.height = 'auto';
+
+    state.messages.push({ role: 'user', content: q });
+    var ai = state.messages.length;
+    state.messages.push({ role: 'assistant', content: '', streaming: true });
+    render();
+
+    var full = DEMO_REPLY.lead;
+    var step = 0;
+    var timer = setInterval(function () {
+      step += 3;
+      state.messages[ai].content = full.slice(0, step);
+      var lead = el.thread.querySelector('.msg[data-idx="' + ai + '"] .answer-lead');
+      if (lead) lead.innerHTML = esc(state.messages[ai].content) + '<span class="cursor"></span>';
+      el.thread.scrollTop = el.thread.scrollHeight;
+      if (step >= full.length) {
+        clearInterval(timer);
+        var reply = Object.assign({}, DEMO_REPLY);
+        reply.lead = DEMO_REPLY.lead;
+        reply.streaming = false;
+        reply.plainText = plainAnswer(reply);
+        state.messages[ai] = reply;
+        state.activeMsg = ai;
+        state.activeCite = null;
+        state.evidenceOpen = true;
+        render();
+        el.thread.scrollTop = el.thread.scrollHeight;
+      }
+    }, 16);
+  }
+
+  /* 首屏：默认把证据栏绑到最后一条有来源的回答上 */
+  state.messages.forEach(function (m, i) {
+    if (m.role === 'assistant' && (m.sources || []).length) state.activeMsg = i;
+  });
+  render();
+  el.thread.scrollTop = el.thread.scrollHeight;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+{
+  "generated_at": "2026-09-27T15:18:48",
+  "corpus": {
+    "total_records": 605274,
+    "departments": 232,
+    "ingested": 605268,
+    "top_departments": [
+      {
+        "department": "妇产科",
+        "count": 84837
+      },
+      {
+        "department": "神经科",
+        "count": 48935
+      },
+      {
+        "department": "消化科",
+        "count": 23171
+      },
+      {
+        "department": "呼吸科",
+        "count": 19215
+      },
+      {
+        "department": "神经脑外科",
+        "count": 19157
+      },
+      {
+        "department": "内科",
+        "count": 18934
+      },
+      {
+        "department": "肛肠",
+        "count": 18639
+      },
+      {
+        "department": "生殖医学科",
+        "count": 18374
+      },
+      {
+        "department": "产科",
+        "count": 17053
+      },
+      {
+        "department": "心血管科",
+        "count": 16782
+      }
+    ],
+    "other_records": 320177,
+    "failed_files": 0
+  },
+  "retrieval": {
+    "bm25_weight": 0.3,
+    "vector_weight": 0.7,
+    "reranker_top_k": 5,
+    "recall_k": 20,
+    "weights_source": "tuned"
+  },
+  "evaluation": {
+    "file": "eval_hybrid_rerank_results.json",
+    "timestamp": "2026-09-26T20:46:14",
+    "mode": "hybrid_rerank",
+    "recall_k": 20,
+    "bm25_weight": 0.3,
+    "vector_weight": 0.7,
+    "reranker_top_k": 5,
+    "testset": "eval_testset.json",
+    "questions": 50,
+    "hit_rate": 0.7,
+    "mrr": 0.6867,
+    "coverage": 0.3972,
+    "similarity": 0.7514,
+    "latency_s": 14.03
+  },
+  "usage": {
+    "conversations": 57,
+    "questions": 111,
+    "answers": 108,
+    "clarifications": 1
+  },
+  "feedback": {
+    "total": 5,
+    "up": 2,
+    "down": 3,
+    "down_rate": 0.6,
+    "with_correction": 1
+  }
+}
