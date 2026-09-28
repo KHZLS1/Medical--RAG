@@ -169,7 +169,9 @@ guide = [
     (61, '· B-3 流式空闲看门狗（后端）：main.py 新增可离线单测的 _watchdog_iter，按**空闲**超时（SSE_IDLE_TIMEOUT_SEC，默认 90s）逐条取流；超时则补兜底文案（区分「一个字都没到」与「吐了一半」两段，都指向急诊）并推 correction 事件，复用既有「整段替换 + 落库覆盖」通道（verdict=stream_idle_timeout）。', False),
     (62, '· B-3 前端：Chat.tsx 从「整轮 120s 硬超时」改为「空闲 105s」（每收到一条事件重新计时，patchLast/onToken 各 touchIdle 一次）。阈值刻意大于后端 90s，让后端先收尾。这才是真正的修法——sse_starlette 每 15s 发 : ping，连接全程是活的，整轮计时会误杀仍在生成的流。', False),
     (63, '· 新增第 7 项离线自测 test_sse_idle.py（7 组断言；关键护栏 B3-3：总耗时 > idle 但每条间隔 < idle 的流一条都不丢，防「整轮计时」退化），已进 CI；test_node_reliability.py 在 B-1 后 116 项 PASS / 退出码 0，既有 5 项离线测试全绿，ruff E9,F 零告警。', False),
-    (64, '· ⚠️ 遗留：流式调用没有硬墙钟（LLM_TIMEOUT_SEC 会被持续吐字/心跳重置，不是墙钟上限），B-3 的 idle 看门狗是**产品层兜底而非根治**；④ 若将来要复活回边，必须先解决「分级 Prompt 看不到上一次检索词」这条根因。EVIDENCE_GRADE_ENABLED 仍建议默认关（每轮 +1 次 LLM 调用）。', False),
+    (64, '· 收口验证（09-28 晚全量复跑 71 条，冻结缓存）：act 59/59 = 100%、落点 60/63 = 95.2%、方向性错误 0、规则门 12/71 零误伤、缓存 66/59/0 frozen、622.8s（8.8s/条）⇒ 与改动前那轮**逐条字段级 0 差异**（act/route/gated/evidence/top_score/enhanced_query/scored_by/steps 全同），证明 B-1/B-3 对默认路径**零副作用**。', False),
+    (65, '· sm-08「好痛」0.501 / gm-03「好难受」0.523 本轮补跑成功（此前卡在 provider）⇒ 与 ooc-05（0.330）同源：裸症状主诉/库外问题拿了 0.33~0.52 的沾边分被判 strong 后走 generate，属**阈值问题非分类问题**；抬 RERANK_SCORE_THRESHOLD 会误杀 0.658 的真·可回答样本，正解是 ④ 的证据分级。', False),
+    (66, '· ⚠️ 仍存：流式调用没有硬墙钟（LLM_TIMEOUT_SEC 会被持续吐字/心跳重置，不是墙钟上限），B-3 的 idle 看门狗是**产品层兜底而非根治**；④ 若将来要复活回边，必须先解决「分级 Prompt 看不到上一次检索词」这条根因。EVIDENCE_GRADE_ENABLED 保持默认关（已拍板）。', False),
 ]
 
 wb = openpyxl.load_workbook(TPL)
@@ -272,7 +274,7 @@ for r, text, bold in guide:
     cell.value = text
     cell.font = Font(name='微软雅黑', size=12 if (bold or r == 1) else 10, bold=bold)
     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-for r in range(1, 66):
+for r in range(1, 68):
     if r not in guide_rows:
         gs.cell(r, 1).value = None
 

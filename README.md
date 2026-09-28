@@ -533,6 +533,7 @@ python scripts/test_groundedness.py       # 阶段四：越界引用剥除 + 生
 python scripts/test_rewrite_cache.py      # 改写缓存：指纹作废 / 冻结模式只读绕过
 python scripts/test_history_summary.py    # 长对话历史摘要层
 python scripts/test_node_reliability.py   # T62：节点级可靠性 / 子图 schema 契约 / 证据分级
+python scripts/test_sse_idle.py           # T62-B3：SSE 流空闲看门狗（idle 计时 ≠ 整轮计时）
 ```
 
 > ⚠️ `test_lifespan.py` **不在**上面这组里 —— 它会真连 MySQL / Milvus / LLM 并建表，
@@ -671,24 +672,33 @@ python scripts/check_data.py --query "头痛怎么办" --mode hybrid --k 5
   ⚠️ 实测（2026-09-28，4 条靶样本）：④ 把 `ooc-04/05/08/09`（top_score 0.330 / 0.576 /
   0.647 / 0.914）**全部**从 `generate` 翻成 `insufficient`，说明它确实做到了分数做不到的事。
   原先还有一条"换检索词回边再检一次"，已因拿不到新词实测删除（理由见上文架构说明）。
+- **裸症状主诉 / 库外问题仍会被判「有资料」**（**阈值问题，非分类问题**）：全量 71 条里落点不符
+  稳定为 **3 条**，都是拿了 0.33~0.52 的沾边分被判 strong 后走 `generate` ——
+  `ooc-05`（遗传性血管性水肿长期预防用药，0.330）、`sm-08`（「好痛」，0.501）、
+  `gm-03`（「好难受」，0.523）。**单靠调 `RERANK_SCORE_THRESHOLD` 治不了**：
+  真·可回答的样本里有低到 0.658 的，抬阈值会连着误杀。根治手段是 T62-④ 的证据分级
+  （看内容不看分数），故 ④ 虽默认关，仍是这两条的正解方向。
 - **评估不可复现**：`temperature=0` ≠ 可复现，唯一来源是改写缓存；而缓存绑 Prompt
   指纹，指纹一变整表作废、参考点跟着重置。现已支持**冻结集**
   （`REWRITE_CACHE_FROZEN=true`：跳过指纹校验 + 只读不落盘，可 `git add -f` 入库），
   A/B 两边才有同一份输入。详见「评估与调优」的两条硬结论与噪声下限。
 - **L2 忠实性核查默认关闭**：先让 L1 跑一段，看 trace 里 unsupported 的分布，
   确认误报率可接受再开。
-- **前端 120s 整轮硬超时会误杀「慢但活着」的生成**（2026-09-28 验收暴露，属基础设施口径问题）：
-  provider 尾延迟实测 **1.4s / 33.6s / 254.1s**（同一句话连算 3 次），而 `Chat.tsx` 的判据是
-  「整轮墙钟 120s」而非「多久没收到字节」。后端 `EventSourceResponse` 每 **15s** 发一条
-  `: ping` 注释行（`sse_starlette` 默认 `DEFAULT_PING_INTERVAL`），连接全程是活的 ⇒
-  **这 120s 是纯前端口径问题**；且后端单轮最坏预算 = 2 次 LLM 调用 ×（`LLM_TIMEOUT_SEC=180`
-  × `max_retries=1`）= **720s**，两者差一个数量级。
-  现象：页面「⚠️ 响应流已中断，未收到任何内容」，后端打「客户端断开连接」+「回答为空，跳过落库」。
-  修法（**未做**）：改成 **idle 超时**（每收到一个字节就重置计时器），阈值 60~90s；
-  文案也需区分「provider 慢、仍在生成」与「流真的断了」。
-  T62-⑧ 保证的是"挂掉不静默"，**不是**"慢不该被杀"；后端能配合的旋钮是
-  `LLM_TIMEOUT_SEC`（客户端级，默认 180s），想真正压后端单轮墙钟要同时降
-  `LLM_TIMEOUT_SEC` 与 `NODE_RETRY_MAX_ATTEMPTS`。⚠️ 节点级 `TimeoutPolicy` 这条路
-  在 sync 节点上走不通（LangGraph 在 `compile()` 阶段直接报错），别再往那儿找。
+- **前端超时口径**（2026-09-28 验收暴露后**已修**，T62-B3）：provider 尾延迟实测
+  **1.4s / 33.6s / 254.1s**（同一句话连算 3 次），而原 `Chat.tsx` 的判据是「整轮墙钟 120s」
+  而非「多久没收到字节」。后端 `EventSourceResponse` 每 **15s** 发一条 `: ping`
+  （`sse_starlette` 默认 `DEFAULT_PING_INTERVAL`），**连接全程是活的** ⇒ 那 120s 是
+  **纯前端口径问题**，会把「慢但仍在生成」的流误杀；而后端单轮最坏预算 = 2 次 LLM 调用
+  ×（`LLM_TIMEOUT_SEC=180` × `max_retries=1`）= **720s**，两者差一个数量级。
+  现象：页面「⚠️ 响应流已中断，未收到任何内容」，后端「客户端断开连接」+「回答为空，跳过落库」。
+  **修法（已落地）**：改成 **idle 超时**（每收到一条事件就重置计时器）——
+  后端按空闲 `SSE_IDLE_TIMEOUT_SEC`（默认 90s）收尾，补兜底文案（区分「一个字都没到」
+  与「吐了一半」）并走 `correction` 出口覆盖落库；前端 idle **105s** 兜底 abort
+  （阈值刻意 > 后端 90s，让后端先优雅收尾）。
+  ⚠️ 但这只是**产品层兜底，不是根治**：`LLM_TIMEOUT_SEC` 对流式响应**不是墙钟上限**
+  （httpx 的 read 超时会被持续吐字/心跳不断重置，实测 4 字问题单轮跑 30+ 分钟未完）。
+  想真正压后端单轮墙钟，要同时降 `LLM_TIMEOUT_SEC` 与 `NODE_RETRY_MAX_ATTEMPTS`。
+  ⚠️ 节点级 `TimeoutPolicy` 这条路在 sync 节点上走不通（LangGraph 在 `compile()` 阶段直接报错），
+  别再往那儿找。
 - **长对话的早期细节仍会丢**：历史摘要层只保留窗口外**用户**发言的前 40 字、最多 4 条；
   更早的助手回答内容不保留（压进来只会挤占窗口）。
