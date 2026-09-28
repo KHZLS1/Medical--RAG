@@ -184,6 +184,28 @@ class Settings(BaseSettings):
     # 分级判定用零温：这是分类任务，不是生成任务。与 rewrite_temperature 同理。
     evidence_grade_temperature: float = 0.0
 
+    # ---- 确定性医学计算工具（T62-⑤）----
+    # 打开后在检索之后插一个 `tool` 节点：由一次 LLM 判断"这题要不要算"，
+    # 要算则用**纯函数**算（CKD-EPI eGFR + 分期、BMI + 中国标准分类、儿童按体重给药）。
+    #
+    # 为什么值得单独一个节点：这类问题让模型"心算"经常错（指数项、单位换算），
+    # 检索也检索不出"你这个数值对应的答案"。确定性的事交给代码，是工具节点的本意。
+    #
+    # 为什么默认关：同样是每轮 +1 次 LLM 调用（用于判定与抽参），与 ④ 同一纪律。
+    # 任何失败/不需要都只是"没算"，不影响本轮问答（fail-open，见 medical_tools）。
+    tool_node_enabled: bool = False
+
+    # ---- 跨会话长期记忆（T62-⑦）----
+    # 打开后在检索之后读一次长期记忆（慢病史/过敏史/长期用药）、在收尾时抽一轮写回。
+    # 存储用 langgraph 的 SqliteStore（与 checkpointer 同源，零新依赖）。
+    # 为什么默认关：写入侧要 +1 次 LLM 调用（抽取长期事实），与 ④⑤ 同一纪律。
+    # 读取侧是本地 sqlite 微秒级读，不产生调用。
+    #
+    # ⚠️ 与 focus_entity 的分工：focus_entity 是 thread 内的（换会话就没了），
+    # 本项是跨会话的。两者生命周期不同，**不要合并**。
+    long_term_memory_enabled: bool = False
+    long_term_memory_db_path: str = "data/graph_memory.sqlite"
+
     # tune 输出最优权重的落盘路径（后端自动叠加到默认值）
     tuned_weights_path: str = "data/tuned_weights.json"
     

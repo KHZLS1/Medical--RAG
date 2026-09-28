@@ -50,15 +50,21 @@
 ### LangGraph 状态图
 
 ```
-                                   ┌── chat ──────────────────────────────→ node_chat_generate ─→ END
-intent（纯规则分流 + 按轮重置状态） ─┤                                        （不检索、不标引用、无免责声明）
-                                   └── medical → 检索子图 → grade（证据分级）
-                                                  │              ├─ chat（子图内 ack/chitchat 掉头回来的）
-                                                  │              └─ strong → generate ─┬─ 正常 → ground_check → END
-                                                  │                                   └─ 降级 → END
-                                                  └─ none ─┬─ 可追问且非急症 → human_review（interrupt 暂停）
-                                                           │        └─ 用户补充 → 回边再去检索 ⟲
-                                                           └─ 否则 → insufficient → END
+intent ─┬─ chat ────────────────────────→ node_chat_generate ─→ END
+        │                                 （不检索、不标引用、无免责声明）
+        └─ medical → 检索子图
+                       ↓
+                     recall   ⑦ 读跨会话长期记忆（默认关，纯本地 sqlite 读，零 LLM）
+                       ↓
+                     tool     ⑤ 确定性医学计算（默认关，每轮 +1 次 LLM 判"要不要算"）
+                       ↓
+                     grade    ④ 证据分级（默认关，每轮 +1 次 LLM）
+                       ├─ chat（子图内 ack/chitchat 掉头回来的）
+                       ├─ strong（或本轮算出了工具结果）→ generate ─┬─ 正常 → ground_check → remember ⑦ → END
+                       │                                             └─ 降级 → END
+                       └─ none ─┬─ 可追问且非急症 → human_review（interrupt 暂停）
+                                │        └─ 用户补充 → 回边再去检索 ⟲
+                                └─ 否则 → insufficient → END
 
 检索子图（带 input_schema / output_schema，进出口都是契约）
   rewrite（改写 + 顺带产出 dialogue_act / focus_entity）
@@ -66,6 +72,9 @@ intent（纯规则分流 + 按轮重置状态） ─┤                         
     └─ 其余 → route → retrieve → rerank
 ```
 
+> `recall` / `tool` / `grade` 三个都是**默认关的空节点**：关着时返回空 update，
+> "多这几跳"不改变任何行为，只是给每个能力留一个统一的接线位置（这是刻意的设计，
+> 不是冗余 —— 开关打开时不需要再动图结构）。
 > `grade` 判不足时**不是**回边重检索，而是把 `evidence_state` 改成 `none`、交给原来的
 > 无资料策略收尾 —— 那条回边经实测删除，理由见下。
 
@@ -93,6 +102,24 @@ intent（纯规则分流 + 按轮重置状态） ─┤                         
   同一个词重跑结果不可能变 ⇒ 那一轮 = 一次完整检索 + 一次 LLM 分级的纯浪费（实测单条
   墙钟因此从分钟级涨到 10 分钟级）。**净收益 100% 来自"判不足 → 走无资料路径"这半边。**
   要复活回边，必须先解决第 ② 条（把 `enhanced_query` 喂进 Prompt 并要求避开已用词）。
+- **确定性医学计算（⑤，默认关）**：`tool` 节点判「这题要不要算」（一次 LLM），要算就用
+  **纯函数**算 —— CKD-EPI 2021 eGFR + KDIGO 分期、BMI + 中国成人分类、儿童对乙酰氨基酚 /
+  布洛芬按体重剂量（`app/medical_tools.py`）。
+  为什么值得做：这类量让模型"心算"经常错（指数项、单位换算），而且**检索也检索不出**
+  "你这个数值对应的答案"（语料里不会恰好有 42.6 这个数）—— 确定性的事交给代码，
+  这正是工具节点的本意。结果追加进 `context`，对生成层与检索资料同构，不另开 Prompt 通路。
+  ⚠️ 关键在路由那一跳：`evidence=none` 但**本轮有工具结果**时仍走 `generate` ——
+  否则"库里没资料、但这个算得出来"会被判成资料不足去追问/拒答，工具就白算了。
+  失败（不需要算 / 解析失败 / 参数不全 / provider 挂）一律只是"没算"，不影响本轮问答。
+- **跨会话长期记忆（⑦，默认关）**：用 LangGraph 的 `SqliteStore`（官方 `BaseStore` 实现，
+  与 checkpointer 同源、零新依赖）记住**慢病史 / 过敏史 / 长期用药**。
+  与 `focus_entity` 的分工：后者是 **thread 内**的（换会话就没了），本项是**跨会话**的 ——
+  生命周期不同，塞进一个字段必然互相污染，所以是两套存储。
+  读（`recall`）只读本地 sqlite、**零 LLM**；写（`remember`）在收尾时抽一轮、**+1 次 LLM 调用**。
+  ⚠️ 记忆注入【用户情况】时带显式约束「除非与本次提问直接相关，否则不要提及」——
+  该段一旦非空，`MEDICAL_PROMPT` 规则 2 那条"空则不得搬运症状"的前提就变了，
+  必须让模型能区分"长期背景"与"本次主诉"。（`MEDICAL_PROMPT` 本身一个字没改。）
+  ⚠️ 开它之前请复跑评测：这是**唯一**会改变生成层输入形态的开关。
 - **无证据路径整条挪出 `MEDICAL_PROMPT`**：该 Prompt 的规则「必须标注引用编号 + 免责声明」
   是无条件的，context 为空时模型只能硬编一个 `[1]`。因此改走独立的
   `INSUFFICIENT_PROMPT`（禁引用 + **代码确定性追加**免责声明），而不是去改那两条规则。
@@ -395,6 +422,9 @@ cd frontend && npm install && npm run dev
 | `GROUNDEDNESS_LLM_ENABLED` | `false` | L2：逐句忠实性核查（+1 次 LLM 调用，确认误报率后再开） |
 | `EVIDENCE_GRADE_ENABLED` | `false` | 证据分级（Self-RAG 式）：判「资料够不够」，不够就推进无资料路径。每轮 +1 次 LLM 调用，故默认关。实测能纠正「高分沾边但答不了」的落点 |
 | `EVIDENCE_GRADE_TEMPERATURE` | `0.0` | 分级是分类任务，零温 |
+| `TOOL_NODE_ENABLED` | `false` | ⑤ 确定性医学计算（CKD-EPI eGFR / BMI / 儿童按体重给药）。每轮 +1 次 LLM 判「要不要算」，故默认关；它能把「库里没资料、但算得出来」的落点救回来 |
+| `LONG_TERM_MEMORY_ENABLED` | `false` | ⑦ 跨会话长期记忆（慢病史 / 过敏史 / 长期用药）。**读**是本地 sqlite 零 LLM，**写**在收尾时 +1 次 LLM 抽取 |
+| `LONG_TERM_MEMORY_DB_PATH` | `data/graph_memory.sqlite` | ⑦ 的存储文件（langgraph 官方 `SqliteStore`，与 checkpointer 同源） |
 | `NODE_RETRY_ENABLED` | `true` | 节点级重试 + 降级兜底（只在出错时生效，成功路径不变） |
 | `NODE_RETRY_MAX_ATTEMPTS` | `3` | 单节点最多尝试次数（**不作用于流式节点**，见架构说明） |
 | `NODE_RETRY_INITIAL_INTERVAL` / `NODE_RETRY_BACKOFF_FACTOR` / `NODE_RETRY_MAX_INTERVAL` | `0.5` / `2.0` / `8.0` | 退避参数 |
@@ -534,6 +564,8 @@ python scripts/test_rewrite_cache.py      # 改写缓存：指纹作废 / 冻结
 python scripts/test_history_summary.py    # 长对话历史摘要层
 python scripts/test_node_reliability.py   # T62：节点级可靠性 / 子图 schema 契约 / 证据分级
 python scripts/test_sse_idle.py           # T62-B3：SSE 流空闲看门狗（idle 计时 ≠ 整轮计时）
+python scripts/test_medical_tools.py      # T62-⑤：确定性医学计算（纯函数 / 解析层 / fail-open）
+python scripts/test_long_term_memory.py   # T62-⑦：跨会话长期记忆（SqliteStore 读写 / 抽取 / 图接入）
 ```
 
 > ⚠️ `test_lifespan.py` **不在**上面这组里 —— 它会真连 MySQL / Milvus / LLM 并建表，
@@ -550,6 +582,7 @@ python scripts/test_lifespan.py         # 启动钩子（MySQL + Milvus + LLM Ke
 python scripts/test_clarify_e2e.py      # 端到端澄清（需后端 + Milvus + LLM Key）
 python scripts/test_backend_api.py      # 旧接口回归
 python scripts/test_sse_via_proxy.py    # 经 Vite proxy 验证 SSE 流式
+python scripts/replay_thread.py         # T62-⑨：time-travel 回放某会话的每步图状态（badcase 复盘，需 MySQL + checkpointer）
 ```
 
 **改 LangGraph 图后的推荐验证方式**：导入 `app.graph` 后 monkeypatch 掉

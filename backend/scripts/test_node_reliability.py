@@ -569,12 +569,116 @@ async def t_evidence_grade():
     check("第二轮「意图判定」恰好 1 次", steps2.count("意图判定") == 1, str(steps2))
 
 
+async def t_medical_tool():
+    """⑤ 确定性医学计算工具节点：接入正确 / 失败不影响原路径 / 跨轮不残留。
+
+    直接调 `node_tool` 与 `_route_after_retrieval`（都是纯函数），不建图 ——
+    这一组要验的是"写什么状态、路由怎么判"，建一次图要十几秒且不增加一丝覆盖。
+    """
+    FAKE = {
+        "tool": "egfr",
+        "args": {"creatinine": 200, "creatinine_unit": "umol/L", "age": 70, "sex": "male"},
+        "summary": "按 CKD-EPI 2021 公式估算，eGFR ≈ 30.4 mL/min/1.73m²，对应 G3b（中重度下降）。",
+        "data": {"egfr": 30.4, "stage": "G3b", "scr_mg_dl": 2.262},
+    }
+
+    print("== ⑤-1 开关关闭 → 一个字段都不写（默认行为零变化）==")
+    with patch.object(g.settings, "tool_node_enabled", False), \
+         patch("app.medical_tools.compute_for_question", lambda q: dict(FAKE)):
+        out = g.node_tool({"question": "肌酐200 男 70岁 eGFR多少",
+                           "dialogue_act": "new_question", "context": "已有资料"})
+    check("开关关 → 空 update", out == {}, str(out))
+
+    print("== ⑤-2 命中工具 → tool_result + context 追加 + trace ==")
+    with patch.object(g.settings, "tool_node_enabled", True), \
+         patch("app.medical_tools.compute_for_question", lambda q: dict(FAKE)):
+        out = g.node_tool({"question": "肌酐200 男 70岁 eGFR多少",
+                           "dialogue_act": "new_question", "context": "已有资料"})
+    check("写了 tool_result", out.get("tool_result", {}).get("tool") == "egfr", str(out.get("tool_result")))
+    check("结果**追加**到 context（原资料不丢）",
+          out.get("context", "").startswith("已有资料") and "30.4" in out.get("context", ""),
+          str(out.get("context"))[:120])
+    check("trace 记了「计算工具」一步",
+          any(t.get("step") == "计算工具" for t in out.get("trace", [])),
+          str(steps_of(out.get("trace", []))))
+    check("context 里带免责声明", "不能替代医生" in out.get("context", ""))
+
+    print("== ⑤-3 不需要算 / 非医学轮 → 一律空 update ==")
+    with patch.object(g.settings, "tool_node_enabled", True), \
+         patch("app.medical_tools.compute_for_question", lambda q: None):
+        check("不需要算 → 空 update",
+              g.node_tool({"question": "孩子发烧了怎么办",
+                           "dialogue_act": "new_question", "context": ""}) == {})
+    with patch.object(g.settings, "tool_node_enabled", True), \
+         patch("app.medical_tools.compute_for_question", lambda q: dict(FAKE)):
+        check("ack 轮不触发计算",
+              g.node_tool({"question": "好的", "dialogue_act": "ack", "context": ""}) == {})
+
+    print("== ⑤-4 路由：库里没资料但有计算结果 → 仍走 generate ==")
+    check("evidence=none + tool_result → generate",
+          g._route_after_retrieval({"dialogue_act": "new_question",
+                                    "evidence_state": "none",
+                                    "tool_result": {"tool": "egfr"}}) == "generate")
+    check("evidence=none 且没算 → 回原路（insufficient）",
+          g._route_after_retrieval({"dialogue_act": "new_question", "evidence_state": "none"},
+                                   clarify_ok=False) == "insufficient")
+    check("evidence=strong 不受影响",
+          g._route_after_retrieval({"dialogue_act": "new_question",
+                                    "evidence_state": "strong"}) == "generate")
+
+    print("== ⑤-5 跨轮不残留（否则上轮算的 eGFR 会让这轮误判「有证据」）==")
+    reset = g.node_classify_intent({"question": "一个全新的问题"})
+    check("node_classify_intent 清空 tool_result",
+          "tool_result" in reset and reset["tool_result"] == {}, str(reset.get("tool_result")))
+
+
+async def t_tool_and_memory_in_graph():
+    """⑤⑦ 在**真实图**里开关全开跑一轮。
+
+    为什么必须有这一组：单测各自过了，不代表"接进图里、开关打开"就能跑 ——
+    ⑧ 的 `TimeoutPolicy` 当初就是这样栽的（每个节点单看都对，一 compile 就抛）。
+    """
+    print("== ⑤⑦ 图级联调（两个开关都打开，走完整图）==")
+    with patch_graph(), \
+         patch("app.rag_chain.get_generation_chain", chain_ok), \
+         patch("app.rag_chain.get_insufficient_chain", chain_ok), \
+         patch("app.rag_chain.get_chat_chain", chain_ok), \
+         patch("app.medical_tools.compute_for_question",
+               lambda q: {"tool": "bmi", "args": {"weight_kg": 70, "height_cm": 175},
+                          "summary": "BMI ≈ 22.9，按中国成人标准属于「正常」。",
+                          "data": {"bmi": 22.9, "category": "正常"}}), \
+         patch("app.long_term_memory.recall",
+               lambda: ([{"kind": "allergy", "text": "对青霉素过敏"}],
+                        "【用户长期病史（跨会话记忆）】\n- 过敏史：对青霉素过敏")), \
+         patch("app.long_term_memory.learn_from_turn",
+               lambda q, a: [{"kind": "history", "text": "高血压 10 年"}]), \
+         patch.object(g.settings, "tool_node_enabled", True), \
+         patch.object(g.settings, "long_term_memory_enabled", True), \
+         patch.object(g.settings, "human_review_enabled", False):
+        graph = g.build_graph()
+        _ev, trace = await run(graph,
+                               {"question": "我 70 公斤 175 厘米，BMI 多少",
+                                "history": [], "trace": []},
+                               g.thread_config(880501))
+    steps = steps_of(trace)
+    check("图能跑通且 trace 含「长期记忆」", "长期记忆" in steps, str(steps))
+    check("trace 含「计算工具」", "计算工具" in steps, str(steps))
+    check("trace 含「记忆写入」", "记忆写入" in steps, str(steps))
+    check("顺序：长期记忆 → 计算工具（recall 在 tool 之前）",
+          steps.index("长期记忆") < steps.index("计算工具"), str(steps))
+    check("记忆写入在最后（收尾才写）", steps[-1] == "记忆写入", str(steps))
+
+
 async def main():
     await t_reliability()
     print()
     await t_subgraph_schema()
     print()
     await t_evidence_grade()
+    print()
+    await t_medical_tool()
+    print()
+    await t_tool_and_memory_in_graph()
 
     print("\n离线自测完成。")
     if _FAILED:

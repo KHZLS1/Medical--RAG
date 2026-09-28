@@ -172,6 +172,12 @@ guide = [
     (64, '· 收口验证（09-28 晚全量复跑 71 条，冻结缓存）：act 59/59 = 100%、落点 60/63 = 95.2%、方向性错误 0、规则门 12/71 零误伤、缓存 66/59/0 frozen、622.8s（8.8s/条）⇒ 与改动前那轮**逐条字段级 0 差异**（act/route/gated/evidence/top_score/enhanced_query/scored_by/steps 全同），证明 B-1/B-3 对默认路径**零副作用**。', False),
     (65, '· sm-08「好痛」0.501 / gm-03「好难受」0.523 本轮补跑成功（此前卡在 provider）⇒ 与 ooc-05（0.330）同源：裸症状主诉/库外问题拿了 0.33~0.52 的沾边分被判 strong 后走 generate，属**阈值问题非分类问题**；抬 RERANK_SCORE_THRESHOLD 会误杀 0.658 的真·可回答样本，正解是 ④ 的证据分级。', False),
     (66, '· ⚠️ 仍存：流式调用没有硬墙钟（LLM_TIMEOUT_SEC 会被持续吐字/心跳重置，不是墙钟上限），B-3 的 idle 看门狗是**产品层兜底而非根治**；④ 若将来要复活回边，必须先解决「分级 Prompt 看不到上一次检索词」这条根因。EVIDENCE_GRADE_ENABLED 保持默认关（已拍板）。', False),
+    (67, '【最近更新 · 2026-09-28 夜】T62 剩余方向：⑤ 工具节点 / ⑦ 跨会话记忆 / ⑨ time-travel', True),
+    (68, '· ⑤ 确定性医学计算（默认关）：新增 app/medical_tools.py —— CKD-EPI 2021 eGFR + KDIGO 分期、BMI + 中国成人分类、儿童对乙酰氨基酚/布洛芬按体重剂量，**全是纯函数**（零 LLM 零 IO，可离线断言）。图里在检索后插一跳 tool。关键一跳在路由：evidence=none 但本轮算出工具结果时**仍走 generate**（否则"库里没资料、但这个算得出来"会被判资料不足去追问/拒答，工具白算）。', False),
+    (69, '· ⑦ 跨会话长期记忆（默认关）：用 langgraph 官方 SqliteStore（与 checkpointer 同源、零新依赖）记慢病史/过敏史/长期用药；recall 在检索后读（纯本地 sqlite，零 LLM），remember 在收尾时抽（+1 次 LLM）。与 focus_entity 刻意分成两套存储 —— 生命周期不同（thread 内 vs 跨会话），合一必互相污染。⚠️ 连接必须 isolation_level=None，否则 store 内部 BEGIN 报 "cannot start a transaction within a transaction"。', False),
+    (70, '· ⑨ time-travel 回放：新增 scripts/replay_thread.py，用 checkpointer 的 aget_state_history 把某会话**每一步**的完整状态摊开（badcase 复盘不用重跑，重跑还未必复现）。⚠️ 脚本末尾必须 os._exit（get_graph 会拉起 Milvus/torch/连接池一批非守护线程，正常退出会挂住）。', False),
+    (71, '· 新增 3 项离线自测（test_medical_tools / test_long_term_memory / node_reliability 图级联调）并进 CI ⇒ 离线测试 7 → **9 项**；既有测试全绿、ruff E9,F 零告警。', False),
+    (72, '· **未做（附理由）**：② `Send` 并行双库召回、③ RAG-Fusion 多查询变体 —— 二者都**改变检索口径**，会让现有 hit_rate/mrr 基线失去可比性，需先立项重标定；⑥ 与 ④ 重叠；⑨ 的 Postgres checkpointer（单机 SQLite 已够，无实际需求）与 astream_events（与现有 trace 事件重叠）。', False),
 ]
 
 wb = openpyxl.load_workbook(TPL)
@@ -274,7 +280,7 @@ for r, text, bold in guide:
     cell.value = text
     cell.font = Font(name='微软雅黑', size=12 if (bold or r == 1) else 10, bold=bold)
     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-for r in range(1, 68):
+for r in range(1, 73):
     if r not in guide_rows:
         gs.cell(r, 1).value = None
 

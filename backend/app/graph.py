@@ -3,16 +3,18 @@
 结构
 ----
   完整图   build_graph():
-      intent ─┬─ medical → 检索子图 → grade（证据分级）
-              │                                  ├─ 判定不足且有预算 → 回边到检索子图 ⟲
+      intent ─┬─ medical → 检索子图 → tool（确定性计算，⑤ 默认关）→ grade（证据分级）
               │                                  ├─ chat（子图内 ack/chitchat 掉头回来的）
-              │                                  ├─ strong → generate ─┬─ 正常 → ground_check
-              │                                  │                     └─ 降级 → END（见 ⑧）
+              │                                  ├─ strong（或有工具结果）→ generate ─┬─ 正常 → ground_check
+              │                                  │                                    └─ 降级 → END（见 ⑧）
               │                                  └─ none ─┬─ 可追问且非急症 → human_review（interrupt）
               │                                           │     ├─ 给了补充 → 回边到检索子图 ⟲
               │                                           │     └─ 收尾/放弃 → insufficient
               │                                           └─ 否则 → insufficient（禁引用编号）
               └─ chat    → 直接回应，不检索
+
+  ⚠️ ④ 的证据分级**没有**回边（2026-09-28 实测删除：分级 Prompt 看不到上一次的检索词，
+     重检必然撞词、纯浪费）。澄清重入那条 `human_review → 检索子图` 与它无关，照旧保留。
 
   检索子图 build_retrieval_graph():  rewrite →(条件)→ route → retrieve → rerank
      ⚠️ 带 `input_schema` / `output_schema`，进出口是契约，见 RetrievalInput。
@@ -202,6 +204,17 @@ class GraphState(TypedDict, total=False):
     # 至于"这一轮到底降级过没有"给观测用的信息，trace 里的「节点降级」步骤已经有了，
     # 不必再存一份状态（存了反而要维护两处一致性）。
     answer_degraded: bool               # 本轮回答由降级 handler 给出（仅流式 LLM 节点会置位）
+    # ---- 确定性医学计算（T62-⑤）----
+    # {"tool", "args", "summary", "data", "text"}；没算就是 {}。
+    # ⚠️ **必须按轮重置**（见 node_classify_intent）—— 否则上一轮算出的 eGFR 会让
+    # 这一轮"库里没资料但有工具结果"，路由直接放行到 generate，答非所问。
+    tool_result: dict
+    # ---- 跨会话长期记忆（T62-⑦）----
+    # long_term_memory：注入生成层【用户情况】的长期病史段落（本轮读到的）。
+    # memory_written：本轮**新写入**的记忆条目（已存在的会被 key 去重掉）。
+    # ⚠️ 两者都必须按轮重置，理由同 tool_result。
+    long_term_memory: str
+    memory_written: list
 
 
 class RetrievalInput(TypedDict, total=False):
@@ -339,11 +352,14 @@ _NODE_KINDS: dict[str, str] = {
     "route": _KIND_TOOL,
     "retrieve": _KIND_TOOL,
     "rerank": _KIND_TOOL,
+    "tool": _KIND_TOOL,
+    "recall": _KIND_TOOL,
     "grade": _KIND_LLM_PLAIN,
     "generate": _KIND_LLM_STREAM,
     "chat": _KIND_LLM_STREAM,
     "insufficient": _KIND_LLM_STREAM,
     "ground_check": _KIND_LLM_PLAIN,
+    "remember": _KIND_LLM_PLAIN,
 }
 
 # 降级文案由**代码确定性给出**，不让 LLM 写 —— 与 DISCLAIMER / GROUNDING_HEDGE
@@ -577,11 +593,12 @@ def node_classify_intent(state: GraphState) -> GraphState:
     后状态跨轮保留，不清空就会滚雪球（详见 _TraceReset）。resume 路径从
     human_review 重入、不经过这里，上一轮的步骤得以保留。
 
-    ⚠️ 它同时负责重置**其它跨轮状态**（④⑧ 引入的 grade / answer_degraded）。
-    这两个都必须按轮清零，理由各不同但后果一样 —— 上一轮的值活到下一轮：
+    ⚠️ 它同时负责重置**其它跨轮状态**（④⑧⑤ 引入的 grade / answer_degraded / tool_result）。
+    这三个都必须按轮清零，理由各不同但后果一样 —— 上一轮的值活到下一轮：
       · `grade` 残留 ⇒ 诊断面板会把上一轮的分级结论当成这一轮的；
-      · `answer_degraded` 残留 ⇒ `_route_after_generate` 会跳过忠实性校验。
-    这是"跨轮状态必须显式重置"的第三次踩点（前两次见 _merge_trace 与 focus_entity），
+      · `answer_degraded` 残留 ⇒ `_route_after_generate` 会跳过忠实性校验；
+      · `tool_result` 残留 ⇒ 这轮明明没算，路由却按"有工具结果"放行 generate，答非所问。
+    这是"跨轮状态必须显式重置"的第四次踩点（前三次见 _merge_trace / focus_entity / ④）。
     **以后往 GraphState 加任何"本轮内有效"的字段，都要回到这里加一行。**
     """
     from .intent import is_conversational   # 延迟导入，避免 import 期耦合
@@ -590,6 +607,9 @@ def node_classify_intent(state: GraphState) -> GraphState:
         "trace": TRACE_RESET,
         "grade": {},
         "answer_degraded": False,
+        "tool_result": {},
+        "long_term_memory": "",
+        "memory_written": [],
     }
     if settings.intent_gate_enabled and is_conversational(state["question"]):
         return {**reset, "intent": "chat"}
@@ -821,12 +841,18 @@ def node_rerank(state: GraphState) -> GraphState:
     }
 
 
-def _build_user_statement(history: list[dict] | None) -> str:
+def _build_user_statement(history: list[dict] | None, memory: str = "") -> str:
     """方案 D：把历史 user 发言拼成【用户情况】，但剔除确认/寒暄类。
 
     原实现把所有历史 user 消息一并拼入，于是"好的""嗯"也被当成主诉，
     导致 MEDICAL_PROMPT 规则 2 的前提（【用户情况】为空则不得搬运症状）
     永远不成立，模型会以为用户一直在描述同一个病、于是反复复述。
+
+    T62-⑦ 追加 `memory`（跨会话长期病史），**只在开启长期记忆时非空**：
+    它带一个显式标题 + "除非与本次提问直接相关，否则不要提及"的约束 ——
+    【用户情况】一旦不为空，规则 2 那条"空则不得搬运症状"的前提就变了，
+    必须让模型能区分"长期背景"与"本次主诉"，否则会把病史当成主诉反复展开。
+    ⚠️ MEDICAL_PROMPT 本身**一个字没改**（规则 9/10 无条件生效那条纪律）。
     """
     from .intent import is_conversational   # 延迟导入，复用 B 的词表
 
@@ -836,7 +862,12 @@ def _build_user_statement(history: list[dict] | None) -> str:
         if m.get("role") == "user"
     ]
     complaints = [u for u in users if u and not is_conversational(u)]
-    return "\n".join(complaints)[:800] or "（无）"
+    body = "\n".join(complaints)[:800] or "（无）"
+    if not memory:
+        return body
+    return (f"{memory}\n"
+            f"（以上为长期背景，除非与本次提问直接相关，否则不要提及）\n"
+            f"{body}")
 
 
 def node_generate(state: GraphState) -> GraphState:
@@ -847,7 +878,8 @@ def node_generate(state: GraphState) -> GraphState:
     answer = chain.invoke({
         "context": state["context"],
         "question": state["question"],
-        "user_statement": _build_user_statement(state.get("history")),
+        "user_statement": _build_user_statement(state.get("history"),
+                                                state.get("long_term_memory") or ""),
     })
     return {"answer": answer}
 
@@ -992,6 +1024,11 @@ def _route_after_retrieval(state: GraphState, clarify_ok: bool = True) -> str:
     if policy_for(state.get("dialogue_act"))["answer"] == "chat":
         return "chat"
     if state.get("evidence_state") == "none":
+        # ⑤：库里没资料，但确定性计算给出了答案 —— 那同样是一种"可回答的证据"。
+        # 少了这一条，eGFR 这类问题会被判成"资料不足"去追问或拒答，工具就白算了。
+        # ⚠️ 只在**本轮的** tool_result 上生效（它在 node_classify_intent 里按轮清零）。
+        if state.get("tool_result"):
+            return "generate"
         return "human_review" if _should_ask_user(state, clarify_ok) else "insufficient"
     return "generate"
 
@@ -1153,6 +1190,120 @@ def node_grade(state: GraphState) -> GraphState:
 
 
 # ============================================================================
+# 确定性医学计算（T62-⑤）
+# ============================================================================
+def node_tool(state: GraphState) -> GraphState:
+    """⑤ 确定性医学计算：把"该算的"交给代码，而不是让模型心算。
+
+    为什么要有这一步
+        eGFR 这类量有确定公式，但指数项 + 单位换算（μmol/L → mg/dL）让模型经常算错；
+        而"去检索"也检索不出"你这个数值对应的答案"（语料里不会有 42.6 这个数）。
+        确定性的事交给代码 —— 这是工具节点存在的全部理由。
+
+    位置：`retrieval → tool → grade`。放在检索之后**不是**因为依赖检索结果，而是因为
+        工具与检索是并列的两种"拿证据"手段；且它必须在 `_route_after_retrieval`
+        判落点**之前**跑完 —— 否则"库里没资料、但这个算得出来"会先被判成 insufficient，
+        工具就白算了（见那条路由里的 tool_result 分支）。
+
+    结果怎么进回答：追加到 `context` 尾部。生成节点只读 context，所以"算出来的结论"
+        与"检索到的资料"对它就是同一种输入，不必另开一条 Prompt 通路，也就不会
+        再引入一份需要同步维护的模板。
+
+    失败纪律（与 ④ 一致）：开关关 / 非医学轮 / 不需要算 / 解析失败 / 参数不全
+        ⇒ 一律返回空 update，本轮照原路径走。工具层**绝不会**成为新的故障点。
+    """
+    if not settings.tool_node_enabled:
+        return {}
+    if policy_for(state.get("dialogue_act"))["answer"] != "medical":
+        return {}
+    from .medical_tools import DISCLAIMER as TOOL_DISCLAIMER
+    from .medical_tools import compute_for_question
+
+    result = compute_for_question(state.get("question") or "")
+    if not result:
+        return {}
+    text = (f"【确定性计算结果 · {result['tool']}】\n"
+            f"{result['summary']}\n（{TOOL_DISCLAIMER}）")
+    context = state.get("context") or ""
+    return {
+        "tool_result": {**result, "text": text},
+        "context": f"{context}\n\n{text}" if context else text,
+        "trace": [_make_step("计算工具", {
+            "tool": result["tool"],
+            "args": result["args"],
+            "summary": result["summary"],
+        })],
+    }
+
+
+# ============================================================================
+# 跨会话长期记忆（T62-⑦）
+# ============================================================================
+def node_recall(state: GraphState) -> GraphState:
+    """⑦ 读跨会话长期记忆（慢病史 / 过敏史 / 长期用药），供生成层作背景。
+
+    与 `focus_entity` 的分工（别混）：focus_entity 是 **thread 内**的，换会话就没了；
+    这里读的是 **跨会话** 的。两者生命周期不同，塞一起必然互相污染。
+
+    位置：`retrieval → recall → tool → grade`。它不依赖检索结果，但必须在
+    `node_generate` 之前读到；与 tool 并列，同属"给生成层补料"。
+
+    开销：只读本地 sqlite（微秒级），**不产生 LLM 调用** —— 这个开关的成本
+    全在写入侧（见 node_remember）。
+    """
+    if not settings.long_term_memory_enabled:
+        return {}
+    if policy_for(state.get("dialogue_act"))["answer"] != "medical":
+        return {}
+    from .long_term_memory import recall
+
+    try:
+        items, text = recall()
+    except Exception as e:
+        print(f"[长期记忆] 读取失败，跳过: {type(e).__name__}: {e}")
+        return {}
+    if not items:
+        return {}
+    return {
+        "long_term_memory": text,
+        "trace": [_make_step("长期记忆", {
+            "count": len(items),
+            "items": [f"{i['kind']}：{i['text']}" for i in items],
+        })],
+    }
+
+
+def node_remember(state: GraphState) -> GraphState:
+    """⑦ 收尾时把这一轮里**长期成立**的事实写进跨会话记忆。
+
+    位置：`ground_check → remember → END`。**只在正常答完的轮次执行** ——
+    降级轮（generate 直接 END）、insufficient、chat 都不经过这里，这是刻意的：
+    抽取要基于"一轮完整问答"，残句和兜底文案里没有什么可记的。
+
+    代价：每轮 **+1 次 LLM 调用**（抽取长期事实）。失败一律当"这轮没记的"，
+    不影响回答（fail-open，与 ④⑤ 同一纪律）。
+    """
+    if not settings.long_term_memory_enabled:
+        return {}
+    from .long_term_memory import KIND_LABELS, learn_from_turn
+
+    try:
+        written = learn_from_turn(state.get("question") or "", state.get("answer") or "")
+    except Exception as e:
+        print(f"[长期记忆] 写入失败，跳过: {type(e).__name__}: {e}")
+        return {}
+    if not written:
+        return {}
+    return {
+        "memory_written": written,
+        "trace": [_make_step("记忆写入", {
+            "count": len(written),
+            "items": [f"{KIND_LABELS[w['kind']]}：{w['text']}" for w in written],
+        })],
+    }
+
+
+# ============================================================================
 # 人工澄清（阶段二 / A3）
 # ============================================================================
 def node_human_review(state: GraphState) -> GraphState:
@@ -1249,11 +1400,13 @@ def build_retrieval_graph():
 
 
 def build_graph(checkpointer=None):
-    """完整图：intent 分流 → 医学走检索子图 → 证据分级 → 按证据二档分流。
+    """完整图：intent 分流 → 医学走检索子图 → 读长期记忆 → 确定性计算 → 证据分级 → 二档分流。
 
     阶段二新增 human_review（interrupt 追问）；
-    ④ 新增 grade（证据分级 + 回边重检索）；
-    ⑧ 给节点挂上重试 / 超时 / 降级。
+    ④ 新增 grade（证据分级；**回边已实测删除**，理由见 node_grade）；
+    ⑤ 新增 tool（确定性医学计算，默认关）；
+    ⑦ 新增 recall / remember（跨会话长期记忆，默认关）；
+    ⑧ 给节点挂上重试 / 降级（节点级 TimeoutPolicy 不可用，见 `_timeout_for` 位置那段说明）。
     checkpointer 由 get_graph() 按配置注入，build 本身不读配置。
 
     澄清闸的可用性按**实际传入的 checkpointer** 绑定到条件边上（`clarify_ok`），
@@ -1269,10 +1422,13 @@ def build_graph(checkpointer=None):
     g = StateGraph(GraphState)
     g.add_node("intent", node_classify_intent)
     g.add_node("retrieval", build_retrieval_graph())
+    g.add_node("recall", node_recall, **_node_opts("recall"))
+    g.add_node("tool", node_tool, **_node_opts("tool"))
     g.add_node("grade", node_grade, **_node_opts("grade"))
     g.add_node("human_review", node_human_review)   # interrupt 节点：刻意不挂可靠性参数
     g.add_node("generate", node_generate, **_node_opts("generate"))
     g.add_node("ground_check", node_ground_check, **_node_opts("ground_check"))
+    g.add_node("remember", node_remember, **_node_opts("remember"))
     g.add_node("insufficient", node_answer_insufficient, **_node_opts("insufficient"))
     g.add_node("chat", node_chat_generate, **_node_opts("chat"))
 
@@ -1285,7 +1441,13 @@ def build_graph(checkpointer=None):
     # 检索完**不再**直连 generate：无资料时必须换掉 Prompt，否则规则 9/10 会逼出假引用。
     # ① 起中间多一跳 grade（证据分级）。它是**空节点**（总开关默认关，直接返回空 update），
     # 所以"多一跳"不改变任何行为，只是给判不足留一个统一的改写点。
-    g.add_edge("retrieval", "grade")
+    # ⑤ 在它前面再插一跳 tool（确定性计算）。同样是**空节点**（默认关），
+    # 且它**必须排在判落点之前** —— 路由要读 tool_result 决定"没资料也能答"。
+    # ⑦ 再前面插一跳 recall（读跨会话长期记忆）。也是空节点（默认关），
+    # 只读本地 sqlite、不产生 LLM 调用；读到的背景由 node_generate 注入【用户情况】。
+    g.add_edge("retrieval", "recall")
+    g.add_edge("recall", "tool")
+    g.add_edge("tool", "grade")
     # 出口表**与检索子图那条完全共用同一个函数** —— 刻意不复制一份：
     # grade 判不足时只把 evidence_state 改成 none，之后该往哪走由原来的策略决定，
     # 判据一个字都不该变。各写一份的话，以后改证据策略就得改两处，而"漏改一处"
@@ -1316,7 +1478,10 @@ def build_graph(checkpointer=None):
         "generate", _route_after_generate,
         {"check": "ground_check", "skip": END},
     )
-    g.add_edge("ground_check", END)
+    # ⑦ 收尾：正常答完的轮次再抽一次"长期成立的病史"写进跨会话记忆。
+    # 只有 ground_check 这条正常路径接它 —— 降级 / insufficient / chat 都不记（理由见 node_remember）。
+    g.add_edge("ground_check", "remember")
+    g.add_edge("remember", END)
     g.add_edge("insufficient", END)
     g.add_edge("chat", END)
     return g.compile(checkpointer=checkpointer)

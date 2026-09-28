@@ -64,6 +64,14 @@ jobs:
         working-directory: backend
         run: python scripts/test_sse_idle.py
 
+      - name: T62-⑤ · 确定性医学计算工具
+        working-directory: backend
+        run: python scripts/test_medical_tools.py
+
+      - name: T62-⑦ · 跨会话长期记忆
+        working-directory: backend
+        run: python scripts/test_long_term_memory.py
+
   lint:
     name: 静态检查（缺陷类）
     runs-on: ubuntu-latest
