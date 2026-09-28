@@ -18,6 +18,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from .config import settings
 from .llm import get_llm
 # 医疗专属 Prompt - 关键！约束 LLM 行为
 MEDICAL_PROMPT = """你是一名严谨、专业的医学助手。请仅基于【医学资料】回答用户的医疗问题。
@@ -218,10 +219,12 @@ def retrieve(question: str, history: list[dict] | None = None) -> tuple[list[Doc
     """
     from .graph import get_retrieval_graph   # 延迟导入，避免与 graph 循环依赖
 
+    # ① 起子图有独立的 input_schema（RetrievalInput），**不要**再传 trace：
+    # 它不在契约里，传了也没用；而子图内部 trace 从空起步正是设计目标
+    # （见 RetrievalInput 的 docstring）。
     state = get_retrieval_graph().invoke({
         "question": question,
         "history": history or [],
-        "trace": [],
     })
     return (
         state.get("docs", []),
@@ -404,6 +407,93 @@ def parse_unsupported(raw: str) -> list[int]:
     except Exception as e:
         print(f"[忠实性校验] 解析失败，按全部有依据处理: {type(e).__name__}: {e}")
         return []
+
+
+# ============================================================================
+# 证据分级（T62-④）：判"这批资料够不够回答"，不够就带着反馈重新检索
+# ============================================================================
+# 它补的是 README「已知限制」第一条那个洞：**主题沾边 ≠ 能回答**。
+# 原方案想按 top_score 区间切 `partial` 三档，实测证伪 —— 真·可回答 0.658~1.000
+# 与"沾边但答不了" 0.576 / 0.914 / 0.647 完全重叠，分数这一维切不开。
+# 于是把判断从"检索侧的一个分数"换成"生成侧的一次自省"：不问分数，直接问
+# "拿这批资料能不能回答这个问题"。
+#
+# ⚠️ retry_query 的写法有**前车之鉴**：改写 Prompt 曾因"规则 2 要求补同义词"
+# 与"规则 4 不得引入新病症"自相矛盾，导致输出关键词堆、把用户没提过的病名带进
+# 检索词。所以这里只允许"补问题自身缺的限定"（部位/人群/病程），**明令禁止
+# 引入用户未提及的疾病名**，宁可给空串（= 放弃重试）。
+#
+# 输出协议刻意只有三个键、且允许 fail-open（解析失败按 sufficient 处理）：
+# 分级是兜底层，绝不能自己变成故障点 —— 与 parse_unsupported 同一纪律。
+EVIDENCE_GRADE_PROMPT = """你是一个医学资料检索质量评审员。
+
+【用户问题】
+{question}
+
+【检索到的资料】（方括号里的编号即资料序号）
+{context}
+
+【任务】
+判断这批资料**是否足以回答用户的问题**。判据只有一条：
+  拿这批资料去回答，能不能给出**完整、有实质内容**的答复？
+只评"资料这一侧够不够"，不要去评判用户问题是否属于医学问题，也不要评价资料本身的质量。
+
+典型的不够用：资料只沾了主题的边（讲了同一个器官/系统但没讲用户问的那个病、
+讲了病因没讲用户问的治疗、讲的是成人而用户问的是儿童）。
+
+【输出】只输出一个 JSON 对象，不要解释、不要输出代码块。键固定两个：
+  "verdict"      "sufficient"（足以回答）或 "insufficient"（不足）
+  "reason"       一句话说明判断依据，不超过 40 字
+
+示例：
+{{"verdict": "insufficient", "reason": "资料只讲了病因，未涉及用户问的治疗"}}
+"""
+
+
+def build_evidence_grade_chain():
+    """证据分级链：{question, context} -> JSON 对象字符串（非流式）"""
+    llm = get_llm(temperature=settings.evidence_grade_temperature)
+    prompt = ChatPromptTemplate.from_template(EVIDENCE_GRADE_PROMPT)
+    return prompt | llm | StrOutputParser()
+
+
+_evidence_grade_chain = None
+
+
+def get_evidence_grade_chain():
+    global _evidence_grade_chain
+    if _evidence_grade_chain is None:
+        _evidence_grade_chain = build_evidence_grade_chain()
+    return _evidence_grade_chain
+
+
+def parse_grade_output(raw: str) -> tuple[str, str]:
+    """把分级输出解析成 (verdict, reason)；任何异常一律 fail-open。
+
+    fail-open = 返回 ("sufficient", ...)：分级解析不了就当"资料够用"，退回
+    本阶段之前的行为。宁可少一次拦，也不能因为解析问题把**本来答得上来**
+    的问题推进"无资料"路径 —— 那是拒答，代价远大于多答。
+
+    verdict 只认字面 "insufficient"，其余（含缺失、拼错、大小写不一、以及
+    旧版 Prompt 里的 "retry"）一律当 sufficient 处理，理由同上。
+    """
+    import json
+    try:
+        text = (raw or "").strip()
+        if text.startswith("```"):
+            text = text.strip("` \n")
+            if text[:4].lower() == "json":
+                text = text[4:]
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return "sufficient", ""
+        raw_verdict = str(data.get("verdict", "")).strip().lower()
+        verdict = "insufficient" if raw_verdict == "insufficient" else "sufficient"
+        reason = str(data.get("reason", "") or "").strip()[:60]
+        return verdict, reason
+    except Exception as e:
+        print(f"[证据分级] 解析失败，按『资料够用』处理: {type(e).__name__}: {e}")
+        return "sufficient", ""
 
 
 async def stream_answer(

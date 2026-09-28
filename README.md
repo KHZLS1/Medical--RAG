@@ -51,22 +51,48 @@
 
 ```
                                    ┌── chat ──────────────────────────────→ node_chat_generate ─→ END
-intent（纯规则 + LLM 分类） ───────┤                                        （不检索、不标引用）
-                                   └── medical → 检索子图
-                                                  rewrite（改写 + 顺带产出 dialogue_act / focus_entity）
-                                                    ├─ act = ack / chitchat →（子图结束）→ chat
-                                                    └─ 其余 → route → retrieve → rerank
-                                                                                    ├─ strong → generate → ground_check → END
-                                                                                    └─ none ─┬─ 可追问且非急症 → human_review（interrupt 暂停）
-                                                                                             │        └─ 用户补充 → requery ─→ …
-                                                                                             └─ 否则 → insufficient → END
+intent（纯规则分流 + 按轮重置状态） ─┤                                        （不检索、不标引用、无免责声明）
+                                   └── medical → 检索子图 → grade（证据分级）
+                                                  │              ├─ chat（子图内 ack/chitchat 掉头回来的）
+                                                  │              └─ strong → generate ─┬─ 正常 → ground_check → END
+                                                  │                                   └─ 降级 → END
+                                                  └─ none ─┬─ 可追问且非急症 → human_review（interrupt 暂停）
+                                                           │        └─ 用户补充 → 回边再去检索 ⟲
+                                                           └─ 否则 → insufficient → END
+
+检索子图（带 input_schema / output_schema，进出口都是契约）
+  rewrite（改写 + 顺带产出 dialogue_act / focus_entity）
+    ├─ act = ack / chitchat →（子图结束）→ chat
+    └─ 其余 → route → retrieve → rerank
 ```
+
+> `grade` 判不足时**不是**回边重检索，而是把 `evidence_state` 改成 `none`、交给原来的
+> 无资料策略收尾 —— 那条回边经实测删除，理由见下。
 
 - **单一事实来源**：检索子图是唯一的检索实现，`rag_chain.retrieve()` 直接调用它，
   不存在「图」与「旧函数」两份逻辑漂移。意图分流**不在**子图内 —— `eval_rag.py`
-  直接调子图做检索评估，不希望被「这题算不算医学问题」干扰。
+  直接调子图做检索评估，不希望被「这题算不算医学问题」干扰；**证据分级同样不在子图内**，
+  它是对话层的判断，而 `eval_rag` 要的只是纯检索指标。
+- **子图进出口是契约**（`RetrievalInput` / `RetrievalOutput`）：`input_schema` 刻意
+  **不含 `trace`** —— 子图会继承父图状态、返回时连继承到的 trace 一起交回，被父图的
+  追加归约器再追加一次。把 trace 挡在门外，子图内部恒从空起步，这条约束就消失了。
+  ⚠️ 把 `trace` 加回 `RetrievalInput` 会立刻退回重复追加，改之前先看它的 docstring。
 - **证据只有两档**：`strong` / `none`。实测 rerank 分数双峰分布，中间是空档，
-  按区间切 `partial` 永远不触发（字段留位待标定）。
+  按区间切 `partial` 永远不触发；「沾边但答不了」改由 **`grade` 节点**从生成侧判
+  （见下）。
+- **证据分级（④）**：`grade` 判「这批资料够不够回答」。判不足时只做一件事 ——
+  把 `evidence_state` 改成 `none`，让既有的无资料策略原样接管（先追问、再兜底）。
+  默认**关闭**（每轮 +1 次 LLM 调用，而 provider 尾延迟是本项目最大的噪声源）。
+  实测（2026-09-28）：靶样本 `ooc-04/05/08/09`（top_score 0.330 / 0.576 / 0.647 / 0.914）
+  开之前四条全走 `generate`、开之后**四条全部翻成 `insufficient`** ⇒ 它确实做到了
+  `top_score` 做不到的事（那四个分数与真·可回答的 0.658~1.000 完全重叠）。
+  ⚠️ **原设计里还有一条「换检索词回边再检一次」，已实测删除。** 依据是三条硬事实：
+  ① 靶样本 4/4 的 `retry_query` 与当前检索词**逐字相同**；② 根因在设计里 —— 分级 Prompt
+  只喂 `{question}` + `{context}`，**看不到上一次用的是什么检索词**，只能从同一个 question
+  再抽一遍关键词，而改写节点也是从同一个 question 抽 ⇒ 两边必然撞词；③ 检索是确定性的，
+  同一个词重跑结果不可能变 ⇒ 那一轮 = 一次完整检索 + 一次 LLM 分级的纯浪费（实测单条
+  墙钟因此从分钟级涨到 10 分钟级）。**净收益 100% 来自"判不足 → 走无资料路径"这半边。**
+  要复活回边，必须先解决第 ② 条（把 `enhanced_query` 喂进 Prompt 并要求避开已用词）。
 - **无证据路径整条挪出 `MEDICAL_PROMPT`**：该 Prompt 的规则「必须标注引用编号 + 免责声明」
   是无条件的，context 为空时模型只能硬编一个 `[1]`。因此改走独立的
   `INSUFFICIENT_PROMPT`（禁引用 + **代码确定性追加**免责声明），而不是去改那两条规则。
@@ -80,6 +106,22 @@ intent（纯规则 + LLM 分类） ───────┤                     
   但整篇没有可引之处，于是**整篇剥掉**（`unanswerable_stripped`）。
   L2（逐句核查论断是否有 context 支持，默认关）开启时额外调一次 LLM。
   文本真的变了才推 `correction` 事件，前端整段替换。
+- **节点级可靠性**：每个节点按类别挂 `RetryPolicy`，按**节点名**挂 `error_handler`。
+  三个硬约束：① **流式节点（generate / chat / insufficient）不挂重试** ——
+  `stream_mode="messages"` 会把失败那次已经吐出去的 token 一起推给前端，
+  重试再吐一遍就是两段拼接的残句（实测确认：异常发生在首个 token 之前时安全，
+  吐了一半再失败就拼接）；② **降级 handler 若要续跑必须返回 `Command(goto=...)`** ——
+  它被 LangGraph 调度成一个 PUSH 任务，**不触发失败节点的出边**，返回普通 dict
+  会让流程静默停在那里（实测确认）；③ **不挂节点级 `timeout`** —— LangGraph 的
+  `TimeoutPolicy` 只支持 async 节点（`validate_timeout_supported` 在 `compile()`
+  阶段直接抛 `ValueError: ... Node 'rewrite' is sync`），而本项目节点全是 sync，
+  挂上就等于**编译失败、后端起不来**（2026-09-28 实测踩到）。要压单轮墙钟只能用
+  **客户端级**超时 `LLM_TIMEOUT_SEC`（透传 `ChatOpenAI(timeout=...)`，能真的掐断 socket）。
+  有了它，任何单点失败都不再让整轮变成空响应：改写挂了退化成原句检索并继续、
+  路由挂了跳过来源过滤继续、召回/精排挂了退化成「无可用资料」、生成挂了给确定性文案
+  并**整段替换**已经显示出去的那半句残文。
+  跳过校验的判据是 `answer_degraded`（"回答由降级产出"），**不是**"本轮有节点降级" ——
+  后者会在"重试轮改写降级了一下、生成其实完全正常"时静默少做一层校验。
 
 > 设计决策与踩坑记录见根目录 `实施计划_阶段二_检查点与人工澄清.md`、
 > `实施计划_阶段三_指代消解.md`、`实施计划_阶段四_忠实性校验.md`
@@ -151,6 +193,12 @@ intent（纯规则 + LLM 分类） ───────┤                     
 **回滚开关**：`DIALOGUE_ACT_ENABLED=false` → act 恒 `new_question`（完全复原还需一并
 回滚改写 Prompt）；`FOLLOWUP_SCORE_WITH_ENHANCED` 单独控制 followup 是否用改写 query 打分；
 `REWRITE_GATE_ON_ACT=false` 退回「改写一律生效」。
+
+**这张表之外还有一道判据**（T62-④）：`EVIDENCE_GRADE_ENABLED=true` 时，`grade` 节点在
+检索之后、按证据状态分流之前再问一次「这批**资料**够不够回答」。它判的是资料这一侧，
+与 `dialogue_act`（用户这一侧想干什么）正交，所以没有并进上表。
+唯一与上表耦合的点是**重试轮**：`grade` 判不足且还有预算时把控制权交回检索子图，
+那一轮 `dialogue_act` 保持不变，`retrieve_with` 用 `grade` 给的新检索词。
 
 ---
 
@@ -345,6 +393,12 @@ cd frontend && npm install && npm run dev
 | `HUMAN_REVIEW_ENABLED` / `HUMAN_REVIEW_MAX_ROUNDS` | `true` / `1` | 证据不足时中断追问 |
 | `GROUNDEDNESS_CITATION_CHECK` | `true` | L1：越界引用编号确定性剥除 |
 | `GROUNDEDNESS_LLM_ENABLED` | `false` | L2：逐句忠实性核查（+1 次 LLM 调用，确认误报率后再开） |
+| `EVIDENCE_GRADE_ENABLED` | `false` | 证据分级（Self-RAG 式）：判「资料够不够」，不够就推进无资料路径。每轮 +1 次 LLM 调用，故默认关。实测能纠正「高分沾边但答不了」的落点 |
+| `EVIDENCE_GRADE_TEMPERATURE` | `0.0` | 分级是分类任务，零温 |
+| `NODE_RETRY_ENABLED` | `true` | 节点级重试 + 降级兜底（只在出错时生效，成功路径不变） |
+| `NODE_RETRY_MAX_ATTEMPTS` | `3` | 单节点最多尝试次数（**不作用于流式节点**，见架构说明） |
+| `NODE_RETRY_INITIAL_INTERVAL` / `NODE_RETRY_BACKOFF_FACTOR` / `NODE_RETRY_MAX_INTERVAL` | `0.5` / `2.0` / `8.0` | 退避参数 |
+| `LLM_TIMEOUT_SEC` | `180` | **当前唯一生效的超时**：单次 LLM 请求墙钟上限（客户端级）。节点级 `TimeoutPolicy` 在 sync 节点上不被 LangGraph 支持，见架构说明 |
 | `UPLOAD_MAX_SIZE_MB` / `UPLOAD_ALLOWED_EXTENSIONS` | `100` / `.pdf,.docx,.txt,.md,.csv` | |
 | `BACKEND_HOST` / `BACKEND_PORT` / `FRONTEND_URL` | `0.0.0.0` / `8000` / `http://localhost:5173` | |
 
@@ -451,7 +505,9 @@ python scripts/export_badcases.py --include-up     # 连好评一起导（做对
    仅 **1/50（2%）**，平均字符相似度 0.638。MoE 路由 / 批大小本身就让贪婪解码不确定。
 2. **可复现只能靠「冻结输入」**。`app/rewrite_cache.py` 是唯一来源：命中 ⇒ 逐字一致 ⇒
    指标可比。指纹（Prompt / 模型 / 温度）一变整表作废。
-   > 指纹已因阶段三的「焦点：」行刷新：`ff58f0485b2954ca`(105 条) → `20930910b4dc2016`(57 条)。
+   > 指纹已因阶段三的「焦点：」行刷新：`ff58f0485b2954ca`(105 条) → `20930910b4dc2016`(66 条)。
+   > 2026-09-28 对抗集新增 `focus_entity` 组（65 → 71 条），冻结集随之从 57 扩到 66 条
+   > ——**纯增量、指纹未变**（是原缓存的子集，只补 9 条、零丢失）。
    > 强制重算：删 `backend/data/cache/rewrite_cache.json`；关闭：`REWRITE_CACHE_ENABLED=false`。
 
    **做 A/B 时用冻结集**（`REWRITE_CACHE_FROZEN=true`）：它跳过指纹校验、只读加载
@@ -471,15 +527,20 @@ python scripts/export_badcases.py --include-up     # 连好评一起导（做对
 
 ```bash
 cd backend
-python scripts/test_clarify_flow.py     # 阶段二：澄清中断与恢复（含 checkpoint 快照清理）
-python scripts/test_focus_entity.py     # 阶段三：跨轮焦点实体
-python scripts/test_groundedness.py     # 阶段四：越界引用剥除 + 生成侧自省后处理
-python scripts/test_rewrite_cache.py    # 改写缓存：指纹作废 / 冻结模式只读绕过
-python scripts/test_history_summary.py  # 长对话历史摘要层
+python scripts/test_clarify_flow.py       # 阶段二：澄清中断与恢复（含 checkpoint 快照清理）
+python scripts/test_focus_entity.py       # 阶段三：跨轮焦点实体
+python scripts/test_groundedness.py       # 阶段四：越界引用剥除 + 生成侧自省后处理
+python scripts/test_rewrite_cache.py      # 改写缓存：指纹作废 / 冻结模式只读绕过
+python scripts/test_history_summary.py    # 长对话历史摘要层
+python scripts/test_node_reliability.py   # T62：节点级可靠性 / 子图 schema 契约 / 证据分级
 ```
 
 > ⚠️ `test_lifespan.py` **不在**上面这组里 —— 它会真连 MySQL / Milvus / LLM 并建表，
 > 属于全栈自测（它曾经被误列在离线组里）。
+>
+> `test_node_reliability.py` 的存在理由是「平时看不出来」：节点重试只在出错时生效、
+> 子图 schema 分离的收益是**消除**一个坑（坑没了测试也不会变红，容易被改回去）、
+> 证据分级默认关（关着时等于没实现）。所以它必须把开关拨过去、把故障注入进去才有意义。
 
 需要全栈的自测：
 
@@ -492,9 +553,13 @@ python scripts/test_sse_via_proxy.py    # 经 Vite proxy 验证 SSE 流式
 
 **改 LangGraph 图后的推荐验证方式**：导入 `app.graph` 后 monkeypatch 掉
 `rewrite_for_retrieval` / `get_retriever` / `route_knowledge_source` / `filter_by_source` /
-`rerank_documents` 与 `rag_chain` 三条链，用带 `rerank_score` 的假 `Document` 跑 `invoke()`，
-断言**节点路径** + **trace 不变量** + rerank 是否被调用。比「起 Milvus 再手测」快两个数量级，
-且能覆盖回滚开关。
+`rerank_documents` 与 `rag_chain` 四条链（含 `get_evidence_grade_chain`），用带
+`rerank_score` 的假 `Document` 跑 `invoke()` / `astream()`，断言**节点路径** +
+**trace 不变量** + rerank 是否被调用。比「起 Milvus 再手测」快两个数量级，且能覆盖回滚开关。
+
+⚠️ 还有一条只有这么测才看得见的：**给节点注入异常**。`error_handler` 被 LangGraph
+调度成 PUSH 任务、不触发失败节点的出边，所以「降级之后流程还走不走得下去」必须真的
+抛一次异常才能验证 —— 光读代码看不出来（`test_node_reliability.py` 的 ⑧-5/⑧-5b 就是干这个的）。
 
 ---
 
@@ -599,11 +664,31 @@ python scripts/check_data.py --query "头痛怎么办" --mode hybrid --k 5
   **整篇剥掉引用编号**（复用阶段四的 `correction` 出口，确定性、可断言、零 LLM）。
   残留局限：措辞是白名单，模型换个说法自认答不上来时仍会漏剥 —— 方向是刻意选的
   （宁可漏剥、不可误剥，误剥会丢掉真回答的出处）。
+  另有一条**从检索侧**处理同一问题的路（T62-④）：`EVIDENCE_GRADE_ENABLED=true` 时
+  `grade` 节点先判「这批资料够不够回答」，不够就把这轮推进无资料路径。它比白名单
+  更本质（不依赖模型措辞），但每轮 +1 次 LLM 调用，故默认关。
+  两条是**互补**关系：④ 治"检索到的根本答不了"，白名单治"答不了但模型还是标了编号"。
+  ⚠️ 实测（2026-09-28，4 条靶样本）：④ 把 `ooc-04/05/08/09`（top_score 0.330 / 0.576 /
+  0.647 / 0.914）**全部**从 `generate` 翻成 `insufficient`，说明它确实做到了分数做不到的事。
+  原先还有一条"换检索词回边再检一次"，已因拿不到新词实测删除（理由见上文架构说明）。
 - **评估不可复现**：`temperature=0` ≠ 可复现，唯一来源是改写缓存；而缓存绑 Prompt
   指纹，指纹一变整表作废、参考点跟着重置。现已支持**冻结集**
   （`REWRITE_CACHE_FROZEN=true`：跳过指纹校验 + 只读不落盘，可 `git add -f` 入库），
   A/B 两边才有同一份输入。详见「评估与调优」的两条硬结论与噪声下限。
 - **L2 忠实性核查默认关闭**：先让 L1 跑一段，看 trace 里 unsupported 的分布，
   确认误报率可接受再开。
+- **前端 120s 整轮硬超时会误杀「慢但活着」的生成**（2026-09-28 验收暴露，属基础设施口径问题）：
+  provider 尾延迟实测 **1.4s / 33.6s / 254.1s**（同一句话连算 3 次），而 `Chat.tsx` 的判据是
+  「整轮墙钟 120s」而非「多久没收到字节」。后端 `EventSourceResponse` 每 **15s** 发一条
+  `: ping` 注释行（`sse_starlette` 默认 `DEFAULT_PING_INTERVAL`），连接全程是活的 ⇒
+  **这 120s 是纯前端口径问题**；且后端单轮最坏预算 = 2 次 LLM 调用 ×（`LLM_TIMEOUT_SEC=180`
+  × `max_retries=1`）= **720s**，两者差一个数量级。
+  现象：页面「⚠️ 响应流已中断，未收到任何内容」，后端打「客户端断开连接」+「回答为空，跳过落库」。
+  修法（**未做**）：改成 **idle 超时**（每收到一个字节就重置计时器），阈值 60~90s；
+  文案也需区分「provider 慢、仍在生成」与「流真的断了」。
+  T62-⑧ 保证的是"挂掉不静默"，**不是**"慢不该被杀"；后端能配合的旋钮是
+  `LLM_TIMEOUT_SEC`（客户端级，默认 180s），想真正压后端单轮墙钟要同时降
+  `LLM_TIMEOUT_SEC` 与 `NODE_RETRY_MAX_ATTEMPTS`。⚠️ 节点级 `TimeoutPolicy` 这条路
+  在 sync 节点上走不通（LangGraph 在 `compile()` 阶段直接报错），别再往那儿找。
 - **长对话的早期细节仍会丢**：历史摘要层只保留窗口外**用户**发言的前 40 字、最多 4 条；
   更早的助手回答内容不保留（压进来只会挤占窗口）。

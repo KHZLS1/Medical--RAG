@@ -1,7 +1,7 @@
 {
  "meta": {
   "fingerprint": "20930910b4dc2016",
-  "count": 57,
+  "count": 66,
   "note": "按 (kind,history,question) 缓存改写结果；改 Prompt/模型/温度会自动作废"
  },
  "entries": {
@@ -460,6 +460,78 @@
    "reason": "",
    "act": "new_question",
    "focus": "糖尿病 饮食"
+  },
+  "64485e32532c489f": {
+   "q": "库欣病经蝶窦手术后的皮质醇缓解判定标准是什么",
+   "query": "库欣病经蝶窦手术后的皮质醇缓解判定标准是什么",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "库欣病 经蝶窦手术 皮质醇缓解"
+  },
+  "8b2a40998b0f06b0": {
+   "q": "库欣病经蝶窦手术后的皮质醇缓解判定标准是什么（用户补充：腹部胀大，脾脏肿大三年）",
+   "query": "库欣病经蝶窦手术后的皮质醇缓解判定标准，患者伴有腹部胀大、脾脏肿大三年，如何评估术后皮质醇水平是否缓解？",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "库欣病 经蝶窦手术 皮质醇缓解"
+  },
+  "7f98c9513acd70e9": {
+   "q": "库欣病术后肾上腺危象昏迷怎么抢救",
+   "query": "库欣病 术后 肾上腺危象 昏迷 抢救 糖皮质激素 氢化可的松 补液 电解质 低血压 休克",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "库欣病 术后 肾上腺危象"
+  },
+  "5add19a4c34a1f20": {
+   "q": "高血压能吃党参吗",
+   "query": "高血压 党参 食用 禁忌 相互作用",
+   "degraded": false,
+   "reason": "",
+   "act": "new_question",
+   "focus": "高血压 党参"
+  },
+  "33371800a62d799a": {
+   "q": "那还要做哪些检查",
+   "query": "孩子发烧39度 需要做哪些检查",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "孩子发烧"
+  },
+  "d37b84e9b1d224a9": {
+   "q": "这个病会遗传吗",
+   "query": "卵巢癌会遗传吗 遗传风险",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "卵巢癌 遗传"
+  },
+  "5c736f243ce92eb3": {
+   "q": "用不用忌口",
+   "query": "糖尿病患者饮食 忌口 禁忌食物",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "糖尿病 饮食"
+  },
+  "2ba6b932c06f986e": {
+   "q": "会传染给家人吗",
+   "query": "幽门螺杆菌 传染 家人 传播途径",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "幽门螺杆菌"
+  },
+  "584ab212d531e366": {
+   "q": "多久复查一次",
+   "query": "甲状腺结节 良性 复查频率 多久一次",
+   "degraded": false,
+   "reason": "",
+   "act": "followup",
+   "focus": "甲状腺结节"
   }
  }
 }

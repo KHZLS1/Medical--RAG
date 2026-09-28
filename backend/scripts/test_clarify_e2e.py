@@ -86,8 +86,8 @@ def last_trace(events):
     ⚠️ 不能取第一条。`graph._astream_run` 在**每个节点更新后**都推一次
     **累计**数组（前端整体替换，见 astream_answer 的 yield 顺序注释），所以
     最后一条才是完整时间线。resume 路径尤其明显：
-        第 1 条 trace = [人工澄清]            ← human_review 返回时推的
-        第 2 条 trace = [人工澄清, 第二轮 5 步] ← requery 返回时推的
+        第 1 条 trace = [人工澄清]              ← human_review 返回时推的
+        第 2 条 trace = [人工澄清, 第二轮 5 步]  ← 检索子图返回时推的
     只读第一条会得出"trace 里没有第二轮步骤"的错误结论。
     """
     traces = [e["data"] for e in events if e["type"] == "trace"]

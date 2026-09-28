@@ -119,6 +119,8 @@ ROUTE_LABEL = {
     "insufficient": "证据不足兜底",
     "human_review": "人工澄清（中断追问）",
     "unknown": "?? 未知",
+    # 不是产品路径，只给"本条执行失败"占位用；**不允许出现在样本集的 expect_route 里**
+    "error": "执行失败（provider 超时）",
 }
 
 
@@ -133,7 +135,7 @@ def validate(items: list[dict]) -> list[str]:
     from app.dialogue_policy import all_acts
 
     legal_acts = set(all_acts())
-    legal_routes = set(ROUTE_LABEL) - {"unknown"}
+    legal_routes = set(ROUTE_LABEL) - {"unknown", "error"}
     problems: list[str] = []
     seen: set[str] = set()
 
@@ -252,6 +254,13 @@ def run_item(graph, item: dict) -> dict:
         "has_disclaimer": DISCLAIMER in (state.get("answer") or ""),
         "steps": [s.get("step") for s in trace],
         "n_intent_step": sum(1 for s in trace if s.get("step") == "意图判定"),
+        # ⚠️ 同样是诊断必需品：`steps` 只留步骤名，没有下面这两项就分不清
+        #   ① "分级到底判了什么"（④ 标定完全靠它）
+        #   ② "这轮是不是降级跑完的"（⑧ 的验收靠它，否则会把降级文案当成正常回答）
+        "grade": next(({k: v for k, v in s.items() if k != "step"}
+                       for s in trace if s.get("step") == "证据分级"), None),
+        "degraded": next(({k: v for k, v in s.items() if k != "step"}
+                          for s in trace if s.get("step") == "节点降级"), None),
     }
 
 
@@ -281,7 +290,7 @@ def diagnose(graph, items: list[dict], ids: list[str]) -> None:
         print(f"\n── {it['id']}  [{it.get('group')}]")
         print(f"   输入      : {it['question']}")
         if it.get("history"):
-            print(f"   历史      : " + " | ".join(
+            print("   历史      : " + " | ".join(
                 f"{m['role'][:1]}:{m['content'][:28]}" for m in it["history"]))
         print(f"   act       : 期望 {it['expect_act']} → 实测 {res['act'] or ('gate' if res['gated'] else '—')}"
               f"{'   ✅' if (res['gated'] or res['act'] == it['expect_act']) else '   ❌'}")
@@ -295,12 +304,43 @@ def diagnose(graph, items: list[dict], ids: list[str]) -> None:
         print(f"   引用一致性: 含引用编号={res['has_citation']}  含免责声明={res['has_disclaimer']}"
               + ("   ← ⚠️ 无资料却带引用编号" if (res["route"] in ("insufficient", "chat")
                                                 and res["has_citation"]) else ""))
+        if res.get("grade"):
+            g = res["grade"]
+            print(f"   证据分级  : {g.get('verdict')} | {g.get('reason') or '—'}")
+        if res.get("degraded"):
+            d = res["degraded"]
+            print(f"   ⚠️ 节点降级: {d.get('node')} · {d.get('error')} · {d.get('action')}"
+                  "   ← 回答来自降级文案，不是模型生成的")
+
+
+def _failed_result(err: BaseException) -> dict:
+    """单条执行失败时的占位结果（provider 卡顿 / 读超时 / 解析异常）。
+
+    为什么不让异常冒出去：整轮 71 条要跑 20~30 分钟，而 provider 的尾延迟是**分钟级**的
+    （实测同一句话连算三次：1.4s / 33.6s / 254.1s）。2026-09-28 就发生过一次：
+    第 67/71 条在 `node_generate` 里抛 `httpx.ReadTimeout` 一路冒到 `main()`，
+    整轮作废、**已跑完的 66 条结果也一起落不了盘** —— 这会让「先量、再改」直接失去测量手段。
+
+    这类条目**不进任何分母**（act / 落点 / 方向性错误全部跳过），只单列计数；
+    但它**必须让退出码非 0**：跑不完整就不能当成"通过"。
+    """
+    return {
+        "error": f"{type(err).__name__}: {err}",
+        "act": None, "route": "error", "gated": False,
+        "top_score": None, "evidence": None, "n_sources": 0,
+        "enhanced_query": None, "scored_by": None, "sources_head": [],
+        "answer_head": "", "answer_tail": "", "has_citation": False,
+        "has_disclaimer": False, "steps": [], "n_intent_step": 0,
+        "grade": None, "degraded": None,
+    }
 
 
 def report(items, results, elapsed, cache_stats, fail_threshold):
     from app.dialogue_policy import NON_RETRIEVAL_ACTS
 
     n = len(items)
+    n_error = 0
+    error_items = []
     act_total = act_hit = 0
     route_hit = 0
     n_gated = 0
@@ -317,6 +357,12 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
         g = it.get("group", "?")
         st = group_stat[g]
         st["n"] += 1
+
+        if res.get("error"):
+            # 执行失败：不进任何分母（见 _failed_result）
+            n_error += 1
+            error_items.append((it, res))
+            continue
 
         if res["n_intent_step"] != 1:
             bad_invariant.append((it, res))
@@ -360,6 +406,10 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
     print(f"{'id':<12}{'期望':<13}{'实测':<13}{'落点':<26}top  引用 判定")
     print("-" * 84)
     for it, res in zip(items, results):
+        if res.get("error"):
+            print(f"{it['id']:<12}{it['expect_act']:<13}{'执行失败':<13}{'—':<26}"
+                  f"{'  —  '}  {'—':<4} error")
+            continue
         got = res["act"] or ("gate" if res["gated"] else "—")
         act_ok = res["gated"] or res["act"] == it["expect_act"]
         # observe=true 的条目不对落点判对错（期望本身没定），标出来即可
@@ -389,14 +439,15 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
     print("汇总")
     print("=" * 78)
     print("混淆矩阵（行=期望 act，列=实测 act；gate=入口规则门拦下，未走改写）")
-    cols = ["new_question", "followup", "ack", "chitchat", "gate", "—"]
+    cols = ["new_question", "followup", "ack", "chitchat", "gate", "—", "error"]
     print(f"{'':<16}" + "".join(f"{c:>14}" for c in cols))
     for exp in ["new_question", "followup", "ack", "chitchat"]:
         row = Counter()
         for it, res in zip(items, results):
             if it["expect_act"] != exp:
                 continue
-            row[("gate" if res["gated"] else (res["act"] or "—"))] += 1
+            row["error" if res.get("error")
+                else ("gate" if res["gated"] else (res["act"] or "—"))] += 1
         print(f"{exp:<16}" + "".join(f"{row.get(c, 0):>14}" for c in cols))
 
     print()
@@ -409,10 +460,44 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
     print()
     print(f"act 准确率（不含被规则门拦下的 {n_gated} 条）："
           f"{act_hit}/{act_total}" + (f" = {act_hit / act_total:.1%}" if act_total else "  —"))
-    route_n = n - len(observed)
-    print(f"最终落点正确率：{route_hit}/{route_n} = {route_hit / route_n:.1%}"
-          + (f"（另有 {len(observed)} 条 observe 只观测、不计入）" if observed else ""))
+    route_n = n - len(observed) - n_error
+    route_pct = f" = {route_hit / route_n:.1%}" if route_n else "  —"
+    print(f"最终落点正确率：{route_hit}/{route_n}{route_pct}"
+          + (f"（另有 {len(observed)} 条 observe 只观测、不计入）" if observed else "")
+          + (f"（另有 {n_error} 条执行失败、不计入）" if n_error else ""))
     print(f"入口规则门拦截：{n_gated}/{n} 条（这些不需 LLM 分类即可判为会话）")
+
+    # ⑧/④ 观测：不读这两项就分不清"回答是模型给的"还是"降级文案看起来像回答"，
+    # 也看不出分级到底判了什么（④ 的标定完全依赖它）。
+    grade_rows = [(it, r) for it, r in zip(items, results) if r.get("grade")]
+    deg_rows = [(it, r) for it, r in zip(items, results) if r.get("degraded")]
+    print()
+    if grade_rows:
+        vc = Counter(r["grade"].get("verdict") for _, r in grade_rows)
+        print(f"证据分级（④）：{len(grade_rows)} 条走了分级 → "
+              + "、".join(f"{k} {v}" for k, v in vc.items()))
+        for it, r in grade_rows:
+            if r["grade"].get("verdict") == "sufficient":
+                continue
+            print(f"   {it['id']} [{r['grade'].get('verdict')}] "
+                  f"{r['grade'].get('reason') or ''}"
+                  f"  → 落点 {ROUTE_LABEL.get(r['route'], r['route'])}")
+    else:
+        print("证据分级（④）：未触发（开关关闭，或本轮没有 strong 证据）")
+    if deg_rows:
+        print(f"⚠️ 节点降级（⑧）：{len(deg_rows)} 条由降级路径产出（**回答不是模型生成的**）：")
+        for it, r in deg_rows:
+            print(f"   {it['id']} {r['degraded'].get('node')} · "
+                  f"{r['degraded'].get('error')} · {r['degraded'].get('action')}")
+    else:
+        print("节点降级（⑧）：0 条")
+
+    if error_items:
+        print()
+        print(f"⚠️ 执行失败 {n_error}/{n} 条（provider 卡顿/超时；**不计入任何分母**）：")
+        for it, res in error_items:
+            print(f"   {it['id']} 「{it['question'][:34]}」 {res['error']}")
+        print("   ⇒ 分母不完整，本轮不能与历史数字直接比较；建议单独重跑这些 id（--diagnose）。")
 
     if wrong_act:
         print()
@@ -462,7 +547,7 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
            if it.get("group") == "out_of_corpus" and isinstance(r["top_score"], (int, float))]
     if ooc:
         scores = sorted(r["top_score"] for _, r in ooc)
-        print(f"\n库外问题的 top_score 分布（标定相关性闸门阈值用，当前阈值见 settings.rerank_score_threshold）：")
+        print("\n库外问题的 top_score 分布（标定相关性闸门阈值用，当前阈值见 settings.rerank_score_threshold）：")
         print("   " + "  ".join(f"{s:.3f}" for s in scores))
         print(f"   最高 {scores[-1]:.3f} / 中位 {scores[len(scores) // 2]:.3f} / 最低 {scores[0]:.3f}")
         print("   若最高分仍低于阈值 → 闸门把库外问题判成『无证据』，兜底路径正确触发。")
@@ -470,15 +555,17 @@ def report(items, results, elapsed, cache_stats, fail_threshold):
     print(f"\n改写缓存：{cache_stats}")
     print(f"总耗时：{elapsed:.1f}s（{elapsed / n:.1f}s/条）")
 
+    # n_error 必须让结论非通过：跑不完整时那些"没失败"的分母本身就是残缺的
     verdict_fail = (len(wrong_act) > fail_threshold or bool(bad_invariant)
-                    or bool(bad_citation) or bool(bad_disclaimer))
+                    or bool(bad_citation) or bool(bad_disclaimer) or bool(n_error))
     print()
     print("=" * 78)
     if verdict_fail:
         print(f"结论：未达门槛 —— 方向性错误 {len(wrong_act)} 条（上限 {fail_threshold}）"
               + ("；不变量被破坏" if bad_invariant else "")
               + ("；引用一致性被破坏" if bad_citation else "")
-              + ("；缺免责声明" if bad_disclaimer else ""))
+              + ("；缺免责声明" if bad_disclaimer else "")
+              + (f"；{n_error} 条执行失败（结果不完整）" if n_error else ""))
     else:
         print(f"结论：通过 —— 方向性错误 {len(wrong_act)} 条 ≤ 上限 {fail_threshold}，"
               f"不变量与引用一致性均成立")
@@ -557,7 +644,13 @@ def main():
     t0 = time.time()
     for i, it in enumerate(items, 1):
         print(f"  [{i:>2}/{len(items)}] {it['id']:<12} {it['question'][:36]}", flush=True)
-        results.append(run_item(graph, it))
+        # 单条隔离：一条 provider 卡顿不该作废整轮（见 _failed_result 的说明）
+        try:
+            results.append(run_item(graph, it))
+        except Exception as e:  # noqa: BLE001
+            print(f"     ⚠️ 本条执行失败，记为 error、不进任何分母：{type(e).__name__}: {e}",
+                  flush=True)
+            results.append(_failed_result(e))
     elapsed = time.time() - t0
 
     if args.json:

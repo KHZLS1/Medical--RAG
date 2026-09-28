@@ -118,7 +118,13 @@ def main():
     check("有 trace", "trace" in types, str(types[:15]))
     check("有 rewrite（医学路径）", "rewrite" in types, str(types[:15]))
     check("有 message_id（可提交反馈）", "message_id" in types, str(types[:15]))
-    msg_id = next((e["data"] for e in events if e["type"] == "message_id"), None)
+    # ⚠️ `message_id` 事件的 `data` 有两种形态，两种都要认（前端 chat.ts 同样兼容）：
+    #     老形态：纯 int
+    #     现形态：{"id": N, "created_at": "..."} —— T45 附加的**服务端落库时间**，
+    #             前端要用它显示助手消息的时间（不能用本地时间，会差时区）。
+    #   本脚本旧版只认 int，导致 T45 之后一直报假失败。
+    raw_msg_id = next((e["data"] for e in events if e["type"] == "message_id"), None)
+    msg_id = raw_msg_id.get("id") if isinstance(raw_msg_id, dict) else raw_msg_id
 
     # ===== 4. 消息列表 =====
     print("\n== 4. GET /api/conversations/{id}/messages ==")
@@ -135,8 +141,11 @@ def main():
 
     # ===== 5. 反馈：幂等 / 汇总 / 撤回 =====
     print("\n== 5. 反馈闭环 ==")
-    check("拿到 message_id", isinstance(msg_id, int), str(msg_id))
-    if isinstance(msg_id, int):
+    check("拿到 message_id", msg_id is not None, str(raw_msg_id))
+    check("message_id 事件带落库时间（T45 契约）",
+          isinstance(raw_msg_id, dict) and bool(raw_msg_id.get("created_at")),
+          str(raw_msg_id))
+    if msg_id is not None:
         r = requests.post(f"{BASE}/api/feedback",
                           json={"message_id": msg_id, "thumbs": "down",
                                 "comment": "[回归自测] 差评"}, timeout=30)

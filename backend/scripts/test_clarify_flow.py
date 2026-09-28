@@ -4,7 +4,7 @@
 内存假实现，只验证**新增的管线本身**：
   1. evidence=none 且可追问 → 图在 human_review 处 interrupt 暂停
   2. 暂停后 get_state(config).next 指向 human_review（main.py 的恢复判据）
-  3. Command(resume=...) 恢复 → 回复融合进原问题 → requery 重新检索
+  3. Command(resume=...) 恢复 → 回复融合进原问题 → 重入检索子图重新检索
   4. 补充后 evidence=strong → generate 正常收尾
   5. 回复「算了」→ insufficient 收尾
   6. 急症问题 → 不追问，直接 insufficient
@@ -103,8 +103,7 @@ PATCHES = {
 
 
 async def run_graph(graph, graph_input, config):
-    """异步跑图，收集 updates 流里的事件（与生产 _astream_run 同为异步消费——
-    node_requery 是 async 节点，同步 stream() 跑不了）"""
+    """异步跑图，收集 updates 流里的事件（与生产 _astream_run 同为异步消费）"""
     events = []
     trace_acc = []
     async for chunk in graph.astream(graph_input, config=config, stream_mode="updates"):

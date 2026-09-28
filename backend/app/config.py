@@ -127,6 +127,63 @@ class Settings(BaseSettings):
     # 单轮最多追问次数（防「追问→还是没有→再追问」死循环）
     human_review_max_rounds: int = 1
 
+    # ---- 节点级可靠性与预算（T62-⑧）----
+    # 为什么把重试从 llm.py 的 client 层上移到图节点层：client 只知道"这次 HTTP
+    # 调用失败"，不知道"这个节点在图里干什么"，于是它只能一律重试、也一律把异常
+    # 抛给调用方 —— 图没有接管的机会，provider 抽一下整轮就是空响应。上移之后
+    # 每个节点有自己的预算与降级动作，**任何单点失败都不再让整轮变成空响应**。
+    #
+    # 两个开关的默认值刻意不同，理由不同：
+    #   重试/降级**只在出错时**生效，成功路径逐字不变 ⇒ 默认开；
+    #   超时是另一回事，见下。
+    node_retry_enabled: bool = True
+    # 单节点最多尝试几次（含首次）。只作用于**非流式**节点，见 graph._NODE_KINDS
+    node_retry_max_attempts: int = 3
+    node_retry_initial_interval: float = 0.5
+    node_retry_backoff_factor: float = 2.0
+    node_retry_max_interval: float = 8.0
+    #
+    # ⚠️⚠️ **节点级 `TimeoutPolicy` 在本项目不可用，不要再加回来。**
+    # langgraph 1.2.11 在 `compile()` 阶段就会拒绝：
+    #   ValueError: Node timeouts are only supported for async nodes because sync
+    #   Python execution cannot be safely cancelled in-process. Node 'rewrite' is sync.
+    # 本项目所有节点都是 `def`（sync）⇒ 只要挂上 TimeoutPolicy，`build_graph()`
+    # 直接抛错、**后端起不来**（2026-09-28 实测踩到）。这不是运行时降级，是
+    # 最坏的一类失败：一个"看起来更安全"的开关会让服务整个消失。
+    # 想压单轮墙钟只有两条路：① 把节点改成 async（大工程）；② 调**客户端级**
+    # 超时 `llm_timeout_sec`（下一条，已在生效）。当前走 ②。
+    #
+    # 单次 LLM 请求的墙钟上限（秒），透传给 ChatOpenAI 的 timeout。
+    # 它是**当前唯一真正生效的超时**：客户端的 httpx 超时能真的掐断 socket。
+    # 默认 180s；配合 `node_retry_max_attempts`，一次节点最多 (180 × max_retries)
+    # × max_attempts 的墙钟 —— 要压预算就同时降这两个值。
+    llm_timeout_sec: float = 180.0
+
+    # SSE 流的**空闲**看门狗（秒）：多久没往客户端推下一条事件就收尾。
+    # <=0 = 不设。为什么需要它：`llm_timeout_sec` 对流式响应**不是墙钟上限** ——
+    # httpx 的 read 超时会被持续吐字/心跳不断重置，实测「好痛」这种 4 字问题
+    # 单轮能跑 30+ 分钟（`sse_starlette` 自己每 15s 发 `: ping`，连接始终是活的）。
+    # 判据刻意用 idle 而非"整轮墙钟"：慢但在吐字的流不该被杀，要掐的是"卡住不动"。
+    # 前端 `Chat.tsx` 有一层 105s 的对称兜底（阈值更大，让后端先收尾）。
+    sse_idle_timeout_sec: float = 90.0
+
+    # ---- 证据分级（T62-④）----
+    # 为什么默认关：它给**每一次有资料的医学回答**加一次 LLM 调用，而 provider
+    # 尾延迟是本项目当前最大的噪声源（实测 1.4s / 33.6s / 254.1s 同题三次）。
+    # 与 groundedness_llm_enabled 同一纪律：先让确定性部分跑稳，再按需打开。
+    #
+    # 打开后它解决 README「已知限制」第一条：资料与问题**沾边但答不了**时
+    # top_score 依然很高（实测 0.576 / 0.914 / 0.647，与真·可回答的 0.658~1.000
+    # 完全重叠），分数切不开 ⇒ 改由 LLM 判"这批资料够不够"，不够就把这轮推进
+    # 无资料路径。2026-09-28 实测：靶样本四条全部被正确翻转。
+    #
+    # ⚠️ 原设计里还有一条"换检索词回边再检一次"，**已实测删除**（拿不到新词，
+    # 纯浪费一轮检索 + 一次 LLM，理由见 graph.node_grade）。所以这里**没有**
+    # `evidence_grade_max_retries` —— 不要再把它加回来，除非先改分级 Prompt。
+    evidence_grade_enabled: bool = False
+    # 分级判定用零温：这是分类任务，不是生成任务。与 rewrite_temperature 同理。
+    evidence_grade_temperature: float = 0.0
+
     # tune 输出最优权重的落盘路径（后端自动叠加到默认值）
     tuned_weights_path: str = "data/tuned_weights.json"
     

@@ -7,7 +7,7 @@
 """
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Depends
@@ -25,6 +25,48 @@ from .api.documents import router as documents_router
 from .api.conversations import router as conversations_router
 from .api.feedback import router as feedback_router
 from .api.stats import router as stats_router
+
+
+# ---- 流空闲超时的兜底文案（见 config.sse_idle_timeout_sec）----
+# 与 graph.DEGRADED_LLM_ANSWER 同款口径：先说清发生了什么，再指向急诊。
+# 分两条是因为"一个 token 都没到"与"吐了一半卡住"对用户是两种不同处境。
+IDLE_TIMEOUT_NO_CONTENT = (
+    "抱歉，本次回答没有成功生成（服务端响应超时）。请稍后重试；"
+    "若情况紧急，请立即拨打 120 或前往急诊。"
+)
+IDLE_TIMEOUT_PARTIAL = (
+    "\n\n⚠️ 服务端响应超时，已停止等待。以上内容可能不完整，建议重试；"
+    "若情况紧急，请立即拨打 120 或前往急诊。"
+)
+
+
+async def _watchdog_iter(stream, idle: float):
+    """按**空闲**超时逐条产出 `(payload, timed_out)`。
+
+    抽成独立函数只为一个理由：**可离线测试**。`chat()` 里那个生成器绑着数据库
+    与图，没法单测；而这段逻辑恰恰最容易写错 —— 写成"整轮计时"就会把慢但在吐字
+    的流一起杀掉（前端就是这么错了 120s 那一版）。
+    所以这里刻意让 idle 在**每取到一条之后重新计时**。
+
+    `timed_out=True` 是收尾标记，payload 为 None：调用方据此补一段确定性文案。
+    `idle <= 0` 表示不设超时（保留原行为）。
+    """
+    stream_iter = stream.__aiter__()
+    while True:
+        try:
+            if idle and idle > 0:
+                payload = await asyncio.wait_for(stream_iter.__anext__(), idle)
+            else:
+                payload = await stream_iter.__anext__()
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            # 别让底层生成器悬着（wait_for 已经把这次 __anext__ 取消了）。
+            with suppress(Exception):
+                await stream.aclose()
+            yield None, True
+            return
+        yield payload, False
 
 
 @asynccontextmanager
@@ -418,7 +460,31 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
             }
 
         try:
-            async for payload in stream:
+            # 流空闲看门狗（理由见 config.sse_idle_timeout_sec 与 _watchdog_iter）：
+            # `llm_timeout_sec` 对流式响应不是墙钟上限，卡住的流能拖到几十分钟。
+            # 前端 `Chat.tsx` 另有一层 105s 的对称兜底（阈值更大，让后端先收尾）。
+            idle = settings.sse_idle_timeout_sec
+            async for payload, timed_out in _watchdog_iter(stream, idle):
+                if timed_out:
+                    print(f"[chat] 流空闲超过 {idle:.0f}s，主动收尾")
+                    full_answer = (
+                        full_answer + IDLE_TIMEOUT_PARTIAL
+                        if full_answer else IDLE_TIMEOUT_NO_CONTENT
+                    )
+                    # 复用 correction 出口（前端整段替换、落库用修正后的文本），
+                    # 这是已经打通的唯一"覆盖而不是追加"的通道。
+                    yield {
+                        "event": "message",
+                        "data": json_mod.dumps(
+                            {"type": "correction",
+                             "data": {"answer": full_answer,
+                                      "invalid_citations": [],
+                                      "verdict": "stream_idle_timeout"}},
+                            ensure_ascii=False,
+                        ),
+                    }
+                    break
+
                 # 解析 payload 收集完整回答和 sources
                 try:
                     evt = json_mod.loads(payload)

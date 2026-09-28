@@ -43,8 +43,13 @@
 - **改写在这份测试集上未带来提升**（测试集 md5 `ed45e0e2`）：无改写 **0.92 / mrr 0.9067**（确定性）｜有改写 0.82 / 0.70（不可复现）。逐题 12 题差异 → 6 题「无改写对、改写两次都错」、0 题反向（符号检验 p≈0.016）。机制：【改写要求】自相矛盾（规则 2 补同义词 vs 规则 4 不引入新病症）⇒ 输出关键词堆、带入用户未提及的词。
 - **噪声下限**：有改写 hit_rate ∈ **0.70~0.82** ⇒ 差距 **<6 题不足以作证据**；无改写是确定性的，可照常比较。
 
-## 对抗评测（样本集 65 条/9 组，严禁取自语料）
-09-27 全量复跑（最新分母）：act **54/54**、落点 **59/62**、**方向性错误 0** ✅、规则门拦 11 条**零误伤**、17.2s/条、缓存 54 hits/0 misses。落点不符 3 条均为「裸症状主诉/库外被判有资料」：`ooc-05`(0.330)、`sm-08`「好痛」(0.501)、`gm-03`「好难受」(0.523) ⇒ **阈值问题，非分类问题**。
+## 对抗评测（样本集 **71 条/10 组**，严禁取自语料）
+- **09-28 新增 `focus_entity` 组 6 条**（`fx-01`~`fx-05` 为 `observe: true`、`fx-06` 是反向样本 `好的`→ack/chat）：`observe` 只判 act、**不进落点分母**。冻结集随之 **57→66 条**（原缓存的子集，只补 9 条、指纹未变）。
+- 规则门预判（`--dry-run`，纯规则零 LLM）：拦 **12/71 条、零误伤**，`fx-06` 被正确拦下 ⇒ 两层分类器没打架。
+- **09-28 全量复跑（71 条口径，当前基线）**：act **59/59 = 100%**、落点 **60/63 = 95.2%**（8 条 observe 不计入）、**方向性错误 0** ✅、规则门拦 **12/71 零误伤**、**13.0s/条**、缓存 `size 66 / hits 59 / **misses 0**`、退出码 0。焦点组 act 5/5（top 0.958~0.999）。
+  ⚠️ **该轮跑了两次，数字逐位一致** ⇒ ① 冻结缓存确实买到了可复现性；② 这组数字可当基线。落点不符仍是同样 3 条（`ooc-05` 0.330 / `sm-08` 0.501 / `gm-03` 0.523）= 阈值问题。
+- ⚠️ **分母随样本集变，不能混用**：65 条口径 act 54/54、落点 59/62；71 条口径 act 59/59、落点 60/63。旧数字留档见下。
+09-27 全量复跑（65 条口径，留档）：act **54/54**、落点 **59/62**、**方向性错误 0** ✅、规则门拦 11 条**零误伤**、17.2s/条、缓存 54 hits/0 misses。落点不符 3 条均为「裸症状主诉/库外被判有资料」：`ooc-05`(0.330)、`sm-08`「好痛」(0.501)、`gm-03`「好难受」(0.523) ⇒ **阈值问题，非分类问题**。
 - **`evidence=strong` ≠ 「可回答」**（= 阶段二入口）：主题沾边但答不了（0.576/0.914/0.647）与真·可回答（0.658~1.000）**`top_score` 分不开** ⇒「partial 按区间切」已排除，改走生成侧自省（T59）。
 - **规则门（`app/intent.py`）**：① 假阳性最致命（会拒答真问题）——`_is_pure_ack()` 要求整串被"确认词+语气助词"吃干净；**整串字面相等必须排在线索检查之前**；子串匹配 + 单字「好」入表曾让「好恶心/好困」被误判。② 假阴性会静默走错分支（`不了` 曾漏）⇒ 补词表按"同族穷举"过一遍；不能把「你」塞进 `_TAIL_CHARS`。③ 同一缺陷会在第二层复现 ⇒ `REWRITE_PROMPT` 与 `CONTEXT_REWRITE_PROMPT` **同时**追加【症状主诉不是闲聊】。④ **改 Prompt ⇒ 缓存指纹整体作废**，必须重跑全量。
 - **生成侧同样波动**（`ooc-08` 两次引用编号不同而检索集相同，源自 `temperature=0.3`）⇒ 涉生成文本的断言别用单次运行下结论。
@@ -53,8 +58,16 @@
 - **Alembic**：`alembic check` 是漂移体检唯一权威。`e03c5380d2c8` baseline（**刻意保留真库历史形态**：conversation_id nullable + 无外键）→ `0f6e3b0d0396` repair（清孤儿 → 收紧 NOT NULL → 补 `fk_chat_messages_conversation_id`）。⚠️ **不能把 baseline 直接写成最终形态**（真库 stamp 在 head 后缺失的外键永远补不上）。真库现状 = 202 条消息 / 孤儿 0 / stamp `0f6e3b0d0396`。`alembic.ini` **必须纯 ASCII**（GBK 读、中文注释直接 `UnicodeDecodeError`）；连接串只在 `env.py` 取；`%` 写 `%%`；约束名靠 `naming_convention`（**别带 `%(referred_table_name)s`**）。
 - **T59 走生成侧自省**：`detect_unanswerable()` 扫回答**开头两句**命中白名单 ⇒ `strip_all_citations()` 整篇剥编号（复用 `correction` 事件下发给前端覆盖）。
 - **T61 历史摘要**：`format_history()` 超 6 轮折叠更早**用户**发言（4 条 × 40 字）。⚠️ 开关判断必须在 `len(history) <= max_turns` 提前返回**之后**。
-- **CI** `.github/workflows/ci.yml` 双 job：离线 5 项测试 + `ruff --select E9,F backend/app`。离线 5 项 = clarify_flow / focus_entity / groundedness / rewrite_cache / history_summary（**`test_lifespan` 不能进**）。`scripts/` **不进 lint**。CI 需先预装 CPU 版 torch。
-- **进度表**：`_build_progress.py`（62 卡 / 11 阶段）需 **openpyxl**，用 `~\.workbuddy\binaries\python\versions\3.13.12\python.exe` 跑（RAG conda env 里没有）。现况：已测试 57/62｜交付口径(P0~P9) 52/55｜未开发 4 = T49/T55/T57/T62。
+- **CI** `.github/workflows/ci.yml` 双 job：离线 **7** 项测试 + `ruff --select E9,F backend/app`。离线 7 项 = clarify_flow / focus_entity / groundedness / rewrite_cache / history_summary / node_reliability / sse_idle（**`test_lifespan` 不能进**）。`scripts/` **不进 lint**。CI 需先预装 CPU 版 torch。
+- **进度表**：`_build_progress.py`（62 卡 / 11 阶段）需 **openpyxl**，用 `~\.workbuddy\binaries\python\versions\3.13.12\python.exe` 跑（RAG conda env 里没有）。现况：已测试 **58/62**（口径A 93.5%）｜交付口径(P0~P9) **53/55**（96.4%）｜未开发 2 = T55/T57（T62 已开发：⑧①④ 落地 + B-1/B-3）。
+- **T62-B 收口（2026-09-28 晚）**：① **④ 回边整条删除**（`_same_query` 守卫本身是死代码——键在 `verdict=="retry"` 而 `parse_grade_output` 只认字面 `insufficient`；净收益全在「判不足→走无资料路径」半边）；连带清掉 `grade_retry` 字段 / `_route_after_grade` / `node_rewrite` 直通分支 / `EVIDENCE_GRADE_MAX_RETRIES` / Prompt 的 `retry_query`（改 2 键），`parse_grade_output` 改**2 元组**。② **流式空闲看门狗**：后端 `main.py` 的 `_watchdog_iter`（`SSE_IDLE_TIMEOUT_SEC` 默认 90s，超时补兜底文案 + 推 `correction`/`verdict=stream_idle_timeout`）｜前端 `Chat.tsx` 整轮 120s → **空闲 105s**（>后端 90s 让后端先收尾）。**这才是真修法**：`sse_starlette` 每 15s 发 `: ping`，整轮计时会误杀仍在生成的流。③ 新增 `test_sse_idle.py`（7 组；护栏 B3-3 = 总耗时>idle 但每间隔<idle 一条不丢）。`node_reliability` 116 项 PASS。
+
+## 端到端验收（T49，2026-09-28 完成）
+- **手段**：本机 Chrome + CDP 无头驱动（`~/.workbuddy/skills/browser-verify-via-cdp`），脚本写 `%TEMP%` 用完即删。关键技巧：① 断言读 `.trace-detail` **文本**，不读截图；② 「复制到的是不是修正版」= **劫持 `navigator.clipboard.writeText` 记录真实载荷**（读到即 `m.content` 原文），别用 `readText()`（headless 要授权）；③ 受控输入走 `HTMLTextAreaElement.prototype` 原生 setter + `input` 事件 + `form.requestSubmit()`；④ 开新会话 = 清 `localStorage['medical-rag.active-conversation-id']` + `Page.reload`；⑤ 越界编号用**环境变量门控的临时注入**构造，验完 `git checkout backend/app/graph.py`（`git diff --quiet` 确认）。
+- **结果**：阶段三 §3.5 四项 ✅｜阶段四 §3.4 五项 ✅｜阶段二 #3 / #9 ✅｜异常 0 / console.error 0。**命门（刷新后仍是修正版）实测通过**：注入 `[9]` → trace `verdict: citation_fixed · invalid: 9` → 页面与复制载荷均无 `[9]` → 刷新前后原文**逐字一致**。
+- **配置注入优先用环境变量，不改 `.env`**：pydantic-settings 环境变量优先于 `.env`，而 `backend/.env` 是 **CRLF**，混入 LF 行有留残行风险。`GROUNDEDNESS_LLM_ENABLED=true` / `HUMAN_REVIEW_ENABLED=false` 都是这样临时注入的。
+- **⚠️ provider 尾延迟是当前最大噪声源**：同一句话连算 3 次 = **1.4s / 33.6s / 254.1s**（254s = 180s 超时 + 重试成功）。而前端 `Chat.tsx` 判据是**整轮墙钟 120s**（`AbortController`），后端单轮最坏 = 2 次 LLM 调用 ×（`timeout=180` × `max_retries=1`）= **720s** ⇒ 口径差一个数量级，表现为「响应流已中断，未收到任何内容」+ 后端「客户端断开连接 / 回答为空跳过落库」。`sse_starlette 2.1.0` 默认每 **15s** 发 `: ping`，连接其实一直是活的 ⇒ **修法是前端改 idle 超时（已落地：前端 105s + 后端 90s 兜底）**，不是加长整轮超时。已写进 README「已知限制」。
+- **`eval_dialogue.py` 已加单条隔离**：一条 provider 卡顿曾让 67/71 处崩掉、整轮 30 分钟与已跑完的 66 条一起作废。现在 `run_item` 外包 try/except → `_failed_result()` 占位，失败条目**不进任何分母**、单列计数、**强制退出码 1**（`route_n` 已扣除、`verdict_fail` 含 `n_error`）。离线验证脚本 7/7 通过（合成结果直接喂 `report()`）。
 
 ## 基线
 `data/eval/baselines/hybrid_rerank.json` = **hit_rate 0.92 / mrr 0.9067 / similarity 0.75 / coverage 0.4402 / latency 12.56s，`meta.rewrite=false`**。取它因为**唯一确定性**；09-27 全量复跑逐位一致 ⇒ 基线继续有效、无需重冻结。coverage/similarity 波动属生成侧噪声、latency 含首载开销，**不宜当作回归**。对比时务必报出 `meta.rewrite` 差异。换回"有改写为准"：`eval --mode hybrid_rerank` 后 `baseline --mode hybrid_rerank --promote`。

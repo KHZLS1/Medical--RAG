@@ -18,8 +18,13 @@ DEFAULT_TEMPERATURE = 0.3
 
 
 @lru_cache(maxsize=8)
-def _build_llm(model: str, temperature: float) -> ChatOpenAI:
-    """真正的构造点。**只接受具体值**，默认值补全在外层 get_llm 做。"""
+def _build_llm(model: str, temperature: float, timeout: float) -> ChatOpenAI:
+    """真正的构造点。**只接受具体值**，默认值补全在外层 get_llm 做。
+
+    `timeout` 参与缓存键：否则改了 `settings.llm_timeout_sec` 之后仍会拿到旧客户端
+    （lru_cache 只认参数）。它是本项目**唯一真正生效的超时** —— 节点级
+    `TimeoutPolicy` 在 sync 节点上会被 langgraph 直接拒绝，见 config 的说明。
+    """
     if not settings.llm_api_key:
         raise RuntimeError(
             "未配置 LLM_API_KEY，请在 backend/.env 中填入你的 Key"
@@ -31,7 +36,7 @@ def _build_llm(model: str, temperature: float) -> ChatOpenAI:
         temperature=temperature,
         streaming=True,     # 前端 SSE 打字机效果需要
         max_tokens=2048,
-        timeout=180,        # 单次请求上限 180s，避免挂死（默认 600s）
+        timeout=timeout,    # 单次请求上限，可在 .env 用 LLM_TIMEOUT_SEC 覆盖
         max_retries=1,      # 失败重试 1 次，快速暴露问题
     )
 
@@ -44,11 +49,12 @@ def get_llm(model: str | None = None, temperature: float | None = None) -> ChatO
         temperature: 采样温度，默认 DEFAULT_TEMPERATURE(0.3)。
                      关键词抽取/结构化输出这类任务应传 0.0，否则结果不可复现。
 
-    ⚠️ 缓存键是 (model, temperature)。默认值补全必须在本函数里做，不能直接把
-    lru_cache 套在公开签名上 —— `get_llm()` 与 `get_llm(None)` 生成的缓存键不同，
+    ⚠️ 缓存键是 (model, temperature, timeout)。默认值补全必须在本函数里做，不能直接
+    把 lru_cache 套在公开签名上 —— `get_llm()` 与 `get_llm(None)` 生成的缓存键不同，
     会白白多造几个客户端实例。所以这里先归一化，再交给 _build_llm。
     """
     return _build_llm(
         model or settings.llm_model,
         DEFAULT_TEMPERATURE if temperature is None else temperature,
+        settings.llm_timeout_sec,
     )

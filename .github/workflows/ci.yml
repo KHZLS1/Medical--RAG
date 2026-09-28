@@ -56,6 +56,14 @@ jobs:
         working-directory: backend
         run: python scripts/test_history_summary.py
 
+      - name: T62 · 节点级可靠性 / 子图 schema / 证据分级（无回边）
+        working-directory: backend
+        run: python scripts/test_node_reliability.py
+
+      - name: T62-B3 · SSE 流空闲看门狗
+        working-directory: backend
+        run: python scripts/test_sse_idle.py
+
   lint:
     name: 静态检查（缺陷类）
     runs-on: ubuntu-latest

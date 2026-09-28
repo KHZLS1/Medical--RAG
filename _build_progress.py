@@ -61,7 +61,7 @@ tasks = [
 
     ('P6 指代消解与忠实性', 'T36', '阶段三·focus_entity 指代消解', '已测试', '仅 followup 且改写退化时兜底'),
     ('P6 指代消解与忠实性', 'T37', '阶段四·忠实性校验', '已测试', 'L2 默认关、fail-open；不进流式节点'),
-    ('P6 指代消解与忠实性', 'T38', '阶段三/四单测与回归', '已测试', '全绿退出码 0；端到端验收待 T49'),
+    ('P6 指代消解与忠实性', 'T38', '阶段三/四单测与回归', '已测试', '全绿退出码 0；端到端验收见 T49'),
 
     ('P7 前端循证工作台', 'T39', '三栏循证工作台改版', '已测试', '构建通过 + 7 项 UI 验证 PASS'),
     ('P7 前端循证工作台', 'T40', '角标与证据卡双向联动', '已测试', '明暗双主题；emoji 换 SVG 图标'),
@@ -74,7 +74,7 @@ tasks = [
     ('P8 全量回归与验证', 'T46', '检索回归复跑', '已测试', '26m24s；0.92 / 0.9067 与基线逐位一致'),
     ('P8 全量回归与验证', 'T47', '对话行为全量回归', '已测试', '1115.3s；act 100% / 落点 95.2%'),
     ('P8 全量回归与验证', 'T48', '改写缓存覆盖核验', '已测试', '54 hits / 0 misses；未命中 11 条为规则门'),
-    ('P8 全量回归与验证', 'T49', '阶段三/四端到端验收', '未开发', '离线部分已由 CI 5 项覆盖；待全栈实测越界编号剥除 / 刷新后仍是修正版'),
+    ('P8 全量回归与验证', 'T49', '阶段三/四端到端验收', '已测试', '09-28 CDP 浏览器验收：阶段三 §3.5 四项 + 阶段四 §3.4 五项全过（含刷新后仍是修正版=命门）+ 阶段二 #3/#9；异常 0/console.error 0'),
 
     ('P9 交付与发布', 'T50', '引用编号可点击溯源', '已测试', '仅对真实存在的编号生效'),
     ('P9 交付与发布', 'T51', '反馈闭环与 B3 看板', '已开发', '反馈迁移语义已并入 alembic baseline 并 stamp；待人工验收看板'),
@@ -89,7 +89,7 @@ tasks = [
     ('P10 工程化与路线图', 'T59', '生成侧自省：越界编号剥除', '已测试', '原「partial 三档」经实测被排除（top_score 分不开可答/不可答）；改走确定性自省后处理'),
     ('P10 工程化与路线图', 'T60', 'badcase 回流管道与 CI', '已测试', 'export_badcases.py + GitHub Actions 双 job（离线 5 项测试 / ruff E9,F 门）'),
     ('P10 工程化与路线图', 'T61', '长对话历史摘要层', '已测试', '超 6 轮折叠「更早对话要点」；HISTORY_SUMMARY_ENABLED 可回滚'),
-    ('P10 工程化与路线图', 'T62', 'LangGraph 深化路线', '未开发', 'source_router 与 checkpointer 已铺路'),
+    ('P10 工程化与路线图', 'T62', 'LangGraph 深化路线', '已开发', '⑧节点级重试/降级 + ①子图 schema 契约 + ④证据分级回边；6 项离线自测进 CI（④ 默认关，待真实数据标定）'),
 ]
 
 PHASE_FILL = {
@@ -145,6 +145,31 @@ guide = [
     (35, '· Alembic 两条 revision 落地（baseline e03c5380d2c8 + repair 0f6e3b0d0396）；真库 21 条孤儿消息已清并补上外键，alembic check 零漂移。', False),
     (36, '· T59 经实测否定原「partial 三档」方案（top_score 分不开可答/不可答），改为确定性自省后处理，规则 9/10 一个字未动。', False),
     (37, '· 仍待办：T57 多用户鉴权、T49 全栈端到端验收、T55 全栈容器化、T62 LangGraph 路线深化。', False),
+    (39, '【最近更新 · 2026-09-28】', True),
+    (40, '· T49 完成：本机 Chrome + CDP 无头驱动做浏览器端到端验收，阶段三四项、阶段四五项、阶段二 #3/#9 全过。', False),
+    (41, '· 命门项实测通过：注入越界 [9] → 页面与复制文本均无 [9]，且**刷新后原文逐字一致**（证明 correction 覆盖落库生效）。', False),
+    (42, '· 对抗集扩到 71 条 / 10 组（新增 focus_entity 组 6 条），冻结改写缓存同步扩到 66 条。', False),
+    (43, '· 暴露一处基础设施问题（非应用 bug）：provider 尾延迟 1.4s/33.6s/254.1s，前端 120s 整轮硬超时会误杀仍在生成的流。', False),
+    (44, '· 仍待办：T57 多用户鉴权、T55 全栈容器化、T62 LangGraph 路线深化。', False),
+    (46, '【最近更新 · 2026-09-28 午】T62 LangGraph 深化（三件一起做）', True),
+    (47, '· ⑧ 节点级可靠性：按类别挂 RetryPolicy、按节点名挂 error_handler。两个实测硬结论——流式节点不能挂重试（会把失败那次的残 token 和重试结果拼一起）、error_handler 是 PUSH 任务不走出边（要续跑必须 Command(goto=)）。', False),
+    (48, '· ① 子图 schema 契约：RetrievalInput 刻意不含 trace ⇒ 解除「父图在子图前不许写 trace」的约束；连带删掉 requery 节点（程序化调用 → 普通边）。', False),
+    (49, '· ④ 证据分级回边（Self-RAG 式，默认关）：grade 判「资料够不够回答」，不够就换检索词回边重检；重试轮改写直通，不写第二条「意图判定」。', False),
+    (50, '· 新增 6 项离线自测（python scripts/test_node_reliability.py）并进 CI；既有 5 项离线测试全绿，ruff E9,F 零告警。', False),
+    (51, '· 仍待办：T57 多用户鉴权、T55 全栈容器化；④ 需在真实数据上标定后再决定是否默认打开。', False),
+    (52, '【最近更新 · 2026-09-28 下午】T62 实测暴露并修掉两个缺陷', True),
+    (53, '· 🔴 节点级 TimeoutPolicy 会让后端起不来：langgraph 在 compile() 阶段直接抛 ValueError（超时只支持 async 节点），本项目全是 sync，而默认值 0 恰好掩盖了它。已删除该机制，换成真正生效的客户端级 LLM_TIMEOUT_SEC（透传 ChatOpenAI(timeout=)），并加防地雷回归断言。', False),
+    (54, '· 🔴 ④ 的回边拿不到新词：靶样本 4/4 的 retry_query 与当前检索词逐字相同（分级 Prompt 看不到上一次用的词 ⇒ 必然与改写节点撞词），检索确定性 ⇒ 同词重跑结果不变，那一轮是纯浪费。经拍板**直接砍掉整条回边**（连守卫一齐删，见下条晚段），只保留「判不足 → 走无资料路径」这半边。', False),
+    (55, '· ④ 标定实得：开启后 ooc-04/05/08/09（top_score 0.576/0.330/0.914/0.647）全部从 generate 翻成 insufficient ⇒ 确实做到了分数做不到的事；净收益全部来自「判不足 → 走无资料路径」这半边。', False),
+    (56, '· 全量复跑 71 条（④ 关）与基线逐位一致：act 59/59、落点 60/63、方向性错误 0、缓存 66/59/0 ⇒ 删 requery + 加 grade 对默认路径零副作用。', False),
+    (57, '· 离线自测 6 项全绿（node_reliability 116 项断言），ruff E9,F 零告警。', False),
+    (58, '· 仍待办：④ 的回边要真正有效需改分级 Prompt（把 enhanced_query 喂进去并要求避开已用词）；sm-08/gm-03 因 provider 劣化未跑完；流式调用没有硬墙钟（client timeout 会被持续吐字重置）。', False),
+    (59, '【最近更新 · 2026-09-28 晚】T62-B 收口：砍回边 + 流式空闲看门狗', True),
+    (60, '· B-1 砍掉 ④ 回边：_same_query 守卫**本身是死代码**（键在 verdict=="retry" 上，而 parse_grade_output 只认字面 insufficient，其余一律折成 sufficient ⇒ 永不触发），已随整条回边一齐删除。node_grade 现在只做一件事：判不足就把这轮推进无资料路径；GraphState/RetrievalInput 的 grade_retry 字段、_route_after_grade、node_rewrite 的「重检索轮直通」分支全部清掉。', False),
+    (61, '· B-3 流式空闲看门狗（后端）：main.py 新增可离线单测的 _watchdog_iter，按**空闲**超时（SSE_IDLE_TIMEOUT_SEC，默认 90s）逐条取流；超时则补兜底文案（区分「一个字都没到」与「吐了一半」两段，都指向急诊）并推 correction 事件，复用既有「整段替换 + 落库覆盖」通道（verdict=stream_idle_timeout）。', False),
+    (62, '· B-3 前端：Chat.tsx 从「整轮 120s 硬超时」改为「空闲 105s」（每收到一条事件重新计时，patchLast/onToken 各 touchIdle 一次）。阈值刻意大于后端 90s，让后端先收尾。这才是真正的修法——sse_starlette 每 15s 发 : ping，连接全程是活的，整轮计时会误杀仍在生成的流。', False),
+    (63, '· 新增第 7 项离线自测 test_sse_idle.py（7 组断言；关键护栏 B3-3：总耗时 > idle 但每条间隔 < idle 的流一条都不丢，防「整轮计时」退化），已进 CI；test_node_reliability.py 在 B-1 后 116 项 PASS / 退出码 0，既有 5 项离线测试全绿，ruff E9,F 零告警。', False),
+    (64, '· ⚠️ 遗留：流式调用没有硬墙钟（LLM_TIMEOUT_SEC 会被持续吐字/心跳重置，不是墙钟上限），B-3 的 idle 看门狗是**产品层兜底而非根治**；④ 若将来要复活回边，必须先解决「分级 Prompt 看不到上一次检索词」这条根因。EVIDENCE_GRADE_ENABLED 仍建议默认关（每轮 +1 次 LLM 调用）。', False),
 ]
 
 wb = openpyxl.load_workbook(TPL)
@@ -247,7 +272,7 @@ for r, text, bold in guide:
     cell.value = text
     cell.font = Font(name='微软雅黑', size=12 if (bold or r == 1) else 10, bold=bold)
     cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-for r in range(1, 42):
+for r in range(1, 66):
     if r not in guide_rows:
         gs.cell(r, 1).value = None
 

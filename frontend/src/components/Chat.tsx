@@ -432,7 +432,28 @@ export default function Chat({
 
     const controller = new AbortController()
     abortRef.current = controller
-    const timeoutId = setTimeout(() => controller.abort(), 120000)
+
+    /**
+     * 空闲超时（**不是**整轮超时）。
+     *
+     * 原先这里是 `setTimeout(() => controller.abort(), 120000)` —— 整轮墙钟 120s。
+     * 那个判据会把"慢但仍在吐字"的流误杀：后端 `sse_starlette` 每 15s 发一条
+     * `: ping`，连接全程是活的；而 provider 的尾延迟是**分钟级**（实测同一句话
+     * 连算三次：1.4s / 33.6s / 254.1s）。2026-09-28 端到端验收里 8 轮问答有 3 轮
+     * 在第 120 秒整被掐断，页面显示"响应流已中断，未收到任何内容"。
+     *
+     * 改成每收到一个事件就重新计时：慢流保得住，真卡死的流照样掐得掉。
+     * 阈值 105s **刻意大于**后端 `SSE_IDLE_TIMEOUT_SEC`（默认 90s）：让后端先收尾
+     * ——它会补一段确定性文案并以正常流结束，用户看到的是"服务端响应超时"而不是
+     * 更粗的"请求超时"。前端这层只兜"后端进程自己也卡住"的情况。
+     */
+    const IDLE_MS = 105_000
+    let idleTimer: number | undefined
+    const touchIdle = () => {
+      if (idleTimer) window.clearTimeout(idleTimer)
+      idleTimer = window.setTimeout(() => controller.abort(), IDLE_MS)
+    }
+    touchIdle()
 
     // 添加用户消息 + 占位的助手消息。
     // 用户消息当场盖上本地发送时间；助手消息的时间要等服务端落库后回传
@@ -452,6 +473,7 @@ export default function Chat({
 
     /** 改写最后一条助手消息。流式期间每条 token 都会走这里，所以必须只做最小拷贝。 */
     const patchLast = (patch: Partial<Message>) => {
+      touchIdle()   // 见到事件就说明流还活着，重置空闲计时
       setMessages((m) => {
         const copy = [...m]
         const last = copy[copy.length - 1]
@@ -482,6 +504,7 @@ export default function Chat({
       conversationId,
       // onToken
       (text) => {
+        touchIdle()   // token 是最频繁的事件，也是"流还活着"的最强证据
         setMessages((m) => {
           const copy = [...m]
           const last = copy[copy.length - 1]
@@ -575,8 +598,8 @@ export default function Chat({
             copy[copy.length - 1] = {
               ...last,
               content: last.content
-                ? `${last.content}\n\n⚠️ 请求超时，请点击重试。`
-                : '⚠️ 请求超时（2分钟无响应），请点击重试。',
+                ? `${last.content}\n\n⚠️ 请求超时（超过 105 秒没有任何新内容），请点击重试。`
+                : '⚠️ 请求超时（超过 105 秒没有任何新内容），请点击重试。',
               streaming: false,
               error: true,
             }
@@ -585,7 +608,7 @@ export default function Chat({
         })
       }
     }).finally(() => {
-      clearTimeout(timeoutId)
+      if (idleTimer) window.clearTimeout(idleTimer)
       abortRef.current = null
       // 兜底补时间：正常路径上 onMessageId 已经给过服务端时间，这里不会生效
       patchTimeIfEmpty()

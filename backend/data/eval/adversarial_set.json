@@ -691,5 +691,82 @@
   "expect_act": "chitchat",
   "expect_route": "chat",
   "note": "2026-09-25 新增，回归「吃干净」判据的盲区：`谢谢` 命中之后残余一个「你」，它既不是确认词也不是语气助词，于是整串吃不完 → 判 False 落到医学分支，对一句致谢去检索作答（与 ack-01「不了」同类缺陷，只是词表里有「谢谢」却拦不住「谢谢你」）。修法是把「谢谢你 / 感谢你」整词入表，**没有**把「你」塞进 _TAIL_CHARS —— 它不是语气助词，塞进去会连「好你」一起放行。"
+ },
+ {
+  "id": "fx-01",
+  "group": "focus_entity",
+  "observe": true,
+  "history": [
+   {"role": "user", "content": "孩子发烧39度怎么办"},
+   {"role": "assistant", "content": "先物理降温并观察精神状态，若持续高热或精神差应及时就医。[1]"}
+  ],
+  "question": "那还要做哪些检查",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "阶段三 §3.4 焦点组。离开 history 后「那还要做哪些检查」没有任何指代对象，必须靠 focus_entity 把「孩子发烧」补进去。observe=true：本条只观测 act，落点期望未定（取决于检索结果），不进落点分母。"
+ },
+ {
+  "id": "fx-02",
+  "group": "focus_entity",
+  "observe": true,
+  "history": [
+   {"role": "user", "content": "卵巢癌术后复查需要注意什么"},
+   {"role": "assistant", "content": "术后复查主要看肿瘤标志物、影像学与症状变化，具体间隔遵医嘱。[1]"}
+  ],
+  "question": "这个病会遗传吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "阶段三 §3.4 焦点组。「这个病」是典型指代，不补焦点则检索词退化成泛问。observe=true 同上。"
+ },
+ {
+  "id": "fx-03",
+  "group": "focus_entity",
+  "observe": true,
+  "history": [
+   {"role": "user", "content": "糖尿病患者饮食注意事项有哪些"},
+   {"role": "assistant", "content": "主食定量、粗细搭配，控制总热量并规律进餐。[1]"}
+  ],
+  "question": "用不用忌口",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "阶段三 §3.4 焦点组。这条**最容易漏**：「忌口」本身像症状主诉，规则门与改写层都可能误判成新问题。observe=true 同上。"
+ },
+ {
+  "id": "fx-04",
+  "group": "focus_entity",
+  "observe": true,
+  "history": [
+   {"role": "user", "content": "幽门螺杆菌怎么根治"},
+   {"role": "assistant", "content": "目前多采用四联疗法，需按疗程服药并复查确认根除。[1]"}
+  ],
+  "question": "会传染给家人吗",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "阶段三 §3.4 焦点组。省略主语的短问句。observe=true 同上。"
+ },
+ {
+  "id": "fx-05",
+  "group": "focus_entity",
+  "observe": true,
+  "history": [
+   {"role": "user", "content": "甲状腺结节需要做手术吗"},
+   {"role": "assistant", "content": "多数良性结节只需定期复查，是否手术取决于大小、形态与穿刺结果。[1]"}
+  ],
+  "question": "多久复查一次",
+  "expect_act": "followup",
+  "expect_route": "generate",
+  "note": "阶段三 §3.4 焦点组。observe=true 同上。"
+ },
+ {
+  "id": "fx-06",
+  "group": "focus_entity",
+  "history": [
+   {"role": "user", "content": "糖尿病患者饮食注意事项有哪些"},
+   {"role": "assistant", "content": "主食定量、粗细搭配，控制总热量并规律进餐。[1]"}
+  ],
+  "question": "好的",
+  "expect_act": "ack",
+  "expect_route": "chat",
+  "note": "阶段三 §3.4 **反向样本**：确认焦点**不被污染**。与 fx-03 共用同一段 history，区别只在这句是纯确认 —— 必须被规则门吃干净、掉头不检索，且**不得更新 focus_entity**（否则焦点会被「好的」这种无实体的话覆盖掉）。本条不标 observe：act 与落点都是明确的。"
  }
 ]
